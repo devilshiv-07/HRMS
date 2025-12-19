@@ -1,5 +1,25 @@
 import prisma from "../prismaClient.js";
 
+const isHalfDay = (type) => type === "HALF_DAY"; 
+
+// Helper function to get leave type display name
+const getLeaveTypeName = (type) => {
+  const typeNames = {
+    "WFH": "WFH",
+    "HALF_DAY": "Half-day Leave",
+    "PAID": "Paid Leave",
+    "UNPAID": "Unpaid Leave",
+    "SICK": "Sick Leave",
+    "CASUAL": "Casual Leave"
+  };
+  return typeNames[type] || "Leave";
+};
+
+// Helper function to check if date ranges overlap
+const checkDateOverlap = (start1, end1, start2, end2) => {
+  return start1 <= end2 && start2 <= end1;
+};
+
 /* --------------------------------------------------------
    CREATE LEAVE — Employees only
 -------------------------------------------------------- */
@@ -11,13 +31,45 @@ export const createLeave = async (req, res) => {
       return res.status(400).json({ success: false, message: "Missing fields" });
     }
 
-    // find employee's department and manager
+    // 🔥 HALF DAY VALIDATION
+    if (isHalfDay(type) && startDate !== endDate) {
+      return res.status(400).json({
+        success: false,
+        message: "Half Day must be for a single date"
+      });
+    }
+
+    // ⭐ CHECK FOR OVERLAPPING APPROVED LEAVES
+    const requestStart = new Date(startDate);
+    const requestEnd = new Date(endDate);
+
+    const overlappingLeaves = await prisma.leave.findMany({
+      where: {
+        userId: req.user.id,
+        status: "APPROVED",
+        OR: [
+          {
+            AND: [
+              { startDate: { lte: requestEnd } },
+              { endDate: { gte: requestStart } }
+            ]
+          }
+        ]
+      }
+    });
+
+    if (overlappingLeaves.length > 0) {
+      const leaveTypeName = getLeaveTypeName(type);
+      return res.status(400).json({
+        success: false,
+        message: `already approved on this date or date-range. Cannot apply for ${leaveTypeName}.`
+      });
+    }
+
     const employee = await prisma.user.findUnique({
       where: { id: req.user.id },
       include: {
-        department: {
-          select: { managerId: true }
-        }
+        department: { select: { managerId: true } }
       }
     });
 
@@ -27,8 +79,8 @@ export const createLeave = async (req, res) => {
       data: {
         userId: req.user.id,
         type,
-        startDate: new Date(startDate),
-        endDate: new Date(endDate),
+        startDate: requestStart,
+        endDate: requestEnd,
         reason: reason || "",
         status: "PENDING",
         approverId
@@ -39,9 +91,13 @@ export const createLeave = async (req, res) => {
       }
     });
 
+    // ✨ Custom success message based on leave type
+    const leaveTypeName = getLeaveTypeName(type);
+    const successMessage = `Your ${leaveTypeName} request has been submitted successfully`;
+
     return res.json({
       success: true,
-      message: "Leave created successfully",
+      message: successMessage,
       leave
     });
 
@@ -50,7 +106,6 @@ export const createLeave = async (req, res) => {
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 };
-
 
 /* --------------------------------------------------------
    LIST LEAVES — Admin sees all, Employee sees own
@@ -122,7 +177,7 @@ export const getLeaveById = async (req, res) => {
 
 
 /* --------------------------------------------------------
-   UPDATE LEAVE
+   UPDATE LEAVE (Employee can edit only PENDING)
 -------------------------------------------------------- */
 export const updateLeave = async (req, res) => {
   try {
@@ -134,7 +189,6 @@ export const updateLeave = async (req, res) => {
     if (!leave)
       return res.status(404).json({ success: false, message: "Leave not found" });
 
-    // Employee rules
     if (req.user.role !== "ADMIN") {
       if (leave.userId !== req.user.id)
         return res.status(403).json({ success: false, message: "Access denied" });
@@ -145,10 +199,53 @@ export const updateLeave = async (req, res) => {
           message: "Cannot modify approved/rejected leave"
         });
 
-      // restrict fields employee can change
       delete input.status;
       delete input.approverId;
       delete input.userId;
+      delete input.rejectReason;
+    }
+
+    // 🔥 HALF DAY VALIDATION (UPDATE)
+    if (
+      isHalfDay(input.type || leave.type) &&
+      input.startDate &&
+      input.endDate &&
+      input.startDate !== input.endDate
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Half Day must be for a single date"
+      });
+    }
+
+    // ⭐ CHECK FOR OVERLAPPING APPROVED LEAVES (when updating dates)
+    if (input.startDate || input.endDate) {
+      const requestStart = new Date(input.startDate || leave.startDate);
+      const requestEnd = new Date(input.endDate || leave.endDate);
+
+      const overlappingLeaves = await prisma.leave.findMany({
+        where: {
+          userId: leave.userId,
+          status: "APPROVED",
+          id: { not: id }, // Exclude current leave
+          OR: [
+            {
+              AND: [
+                { startDate: { lte: requestEnd } },
+                { endDate: { gte: requestStart } }
+              ]
+            }
+          ]
+        }
+      });
+
+      if (overlappingLeaves.length > 0) {
+        const leaveTypeName = getLeaveTypeName(input.type || leave.type);
+        return res.status(400).json({
+          success: false,
+          message: `You already have an approved leave on this date range. Cannot update ${leaveTypeName}.`
+        });
+      }
     }
 
     const updated = await prisma.leave.update({
@@ -160,9 +257,13 @@ export const updateLeave = async (req, res) => {
       }
     });
 
+    // ✨ Custom success message
+    const leaveTypeName = getLeaveTypeName(updated.type);
+    const successMessage = `Your ${leaveTypeName} request has been updated successfully`;
+
     return res.json({
       success: true,
-      message: "Leave updated",
+      message: successMessage,
       leave: updated
     });
 
@@ -183,10 +284,47 @@ export const approveLeave = async (req, res) => {
     }
 
     const id = req.params.id;
-    const { action } = req.body;
+    const { action, reason } = req.body;
 
     if (!["APPROVED", "REJECTED"].includes(action)) {
       return res.status(400).json({ success: false, message: "Invalid action" });
+    }
+
+    // Get the leave to check for overlaps before approving
+    const leaveToApprove = await prisma.leave.findUnique({
+      where: { id },
+      include: { user: true }
+    });
+
+    if (!leaveToApprove) {
+      return res.status(404).json({ success: false, message: "Leave not found" });
+    }
+
+    // ⭐ CHECK FOR OVERLAPPING APPROVED LEAVES (only when approving)
+    if (action === "APPROVED") {
+      const overlappingLeaves = await prisma.leave.findMany({
+        where: {
+          userId: leaveToApprove.userId,
+          status: "APPROVED",
+          id: { not: id }, // Exclude current leave
+          OR: [
+            {
+              AND: [
+                { startDate: { lte: leaveToApprove.endDate } },
+                { endDate: { gte: leaveToApprove.startDate } }
+              ]
+            }
+          ]
+        }
+      });
+
+      if (overlappingLeaves.length > 0) {
+        const leaveTypeName = getLeaveTypeName(leaveToApprove.type);
+        return res.status(400).json({
+          success: false,
+          message: `This employee already has an approved leave on this date range. Cannot approve ${leaveTypeName}.`
+        });
+      }
     }
 
     const leave = await prisma.leave.update({
@@ -194,6 +332,7 @@ export const approveLeave = async (req, res) => {
       data: {
         status: action,
         approverId: req.user.id,
+        rejectReason: action === "REJECTED" ? reason || "" : null,
       },
       include: {
         user: true,
@@ -201,9 +340,14 @@ export const approveLeave = async (req, res) => {
       }
     });
 
+    // ✨ Custom success message based on action and leave type
+    const leaveTypeName = getLeaveTypeName(leave.type);
+    const actionText = action === "APPROVED" ? "approved" : "rejected";
+    const successMessage = `${leaveTypeName} request has been ${actionText}`;
+
     return res.json({
       success: true,
-      message: `Leave ${action.toLowerCase()}`,
+      message: successMessage,
       leave
     });
 
@@ -239,9 +383,13 @@ export const deleteLeave = async (req, res) => {
 
     await prisma.leave.delete({ where: { id } });
 
+    // ✨ Custom success message
+    const leaveTypeName = getLeaveTypeName(leave.type);
+    const successMessage = `Your ${leaveTypeName} request has been deleted successfully`;
+
     return res.json({
       success: true,
-      message: "Leave deleted"
+      message: successMessage
     });
 
   } catch (error) {

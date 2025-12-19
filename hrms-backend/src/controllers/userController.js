@@ -1,5 +1,6 @@
 import prisma from "../prismaClient.js";
 import bcrypt from "bcryptjs";
+const TOTAL_YEARLY_LEAVES = 21;
 
 /* ============================================================
    GET LOGGED-IN USER INFO
@@ -74,13 +75,14 @@ export const updateMyProfile = async (req, res) => {
 };
 
 /* ============================================================
-   LIST USERS
+   LIST USERS (Admin gets all info, Employee gets safe info)
 ============================================================ */
 export const listUsers = async (req, res) => {
   try {
     const requester = req.user;
 
     if (requester.role === "ADMIN") {
+      // ADMIN → full access
       const users = await prisma.user.findMany({
         select: {
           id: true,
@@ -99,20 +101,20 @@ export const listUsers = async (req, res) => {
       return res.json({ success: true, users });
     }
 
-    // employee → only self
-    const me = await prisma.user.findUnique({
-      where: { id: requester.id },
+    // EMPLOYEE → needs all users (for dropdown), but safe fields only
+    const users = await prisma.user.findMany({
       select: {
         id: true,
-        email: true,
         firstName: true,
         lastName: true,
         role: true,
         departmentId: true,
       },
+      orderBy: { firstName: "asc" },
     });
 
-    return res.json({ success: true, users: [me] });
+    return res.json({ success: true, users });
+
   } catch (err) {
     console.error("listUsers ERROR:", err);
     return res.status(500).json({
@@ -121,6 +123,7 @@ export const listUsers = async (req, res) => {
     });
   }
 };
+
 
 /* ============================================================
    CREATE USER (ADMIN ONLY)
@@ -263,6 +266,43 @@ export const updateUser = async (req, res) => {
     });
   }
 };
+function getUniqueLeaveUnits(leaves) {
+  const dayMap = {}; // { "2025-02-12": 1 | 0.5 }
+
+  leaves.forEach((l) => {
+    let cur = new Date(l.startDate);
+    const end = new Date(l.endDate);
+
+    const value = l.type === "HALF_DAY" ? 0.5 : 1;
+
+    while (cur <= end) {
+      const iso = cur.toISOString().slice(0, 10);
+      dayMap[iso] = Math.max(dayMap[iso] || 0, value);
+      cur.setDate(cur.getDate() + 1);
+    }
+  });
+
+  return Object.values(dayMap).reduce((a, b) => a + b, 0);
+}
+
+// function getUniqueLeaveDays(leaves) {
+//   const dayMap = {}; // { "2025-02-12": 1 | 0.5 }
+
+//   leaves.forEach((l) => {
+//     let cur = new Date(l.startDate);
+//     const end = new Date(l.endDate);
+
+//     const value = l.type === "HALF_DAY" ? 0.5 : 1;
+
+//     while (cur <= end) {
+//       const iso = cur.toISOString().slice(0, 10);
+//       dayMap[iso] = Math.max(dayMap[iso] || 0, value);
+//       cur.setDate(cur.getDate() + 1);
+//     }
+//   });
+
+//   return Object.values(dayMap).reduce((a, b) => a + b, 0);
+// }
 export const getUserFullDetails = async (req, res) => {
   try {
     const { id } = req.params;
@@ -278,11 +318,71 @@ export const getUserFullDetails = async (req, res) => {
       },
     });
 
-    if (!user) return res.status(404).json({ message: "User not found" });
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
 
-    res.json({ user });
+    const allLeaves = user.leaves || [];
+
+    // ================= YEAR RANGE (SAME AS LEAVE UI) =================
+    const currentYear = new Date().getFullYear();
+    const yearStart = new Date(`${currentYear}-01-01`);
+    const yearEnd   = new Date(`${currentYear}-12-31`);
+
+    const yearlyLeaves = allLeaves.filter(
+      (l) =>
+        new Date(l.startDate) >= yearStart &&
+        new Date(l.endDate) <= yearEnd
+    );
+
+    // ================== KPIs ==================
+
+    // ✅ Applied Leaves (NON-WFH, incl HALF_DAY)
+    const totalLeaves = getUniqueLeaveUnits(
+      yearlyLeaves.filter((l) => l.type !== "WFH")
+    );
+
+    // ✅ Approved Leaves (NON-WFH, NON-UNPAID)
+    const approvedLeaves = getUniqueLeaveUnits(
+      yearlyLeaves.filter(
+        (l) =>
+          l.status === "APPROVED" &&
+          l.type !== "WFH" &&
+          l.type !== "UNPAID"
+      )
+    );
+
+    // ✅ Approved WFH Days
+    const wfhDays = getUniqueLeaveUnits(
+      yearlyLeaves.filter(
+        (l) => l.status === "APPROVED" && l.type === "WFH"
+      )
+    );
+
+    // ✅ Remaining Leaves
+    const remainingLeaves = Math.max(
+      TOTAL_YEARLY_LEAVES - approvedLeaves,
+      0
+    );
+
+    return res.json({
+      success: true,
+      user,
+      stats: {
+        totalLeaves,        // applied (half-day = 0.5)
+        approvedLeaves,     // approved (half-day = 0.5)
+        remainingLeaves,
+        wfhDays,
+        yearlyQuota: TOTAL_YEARLY_LEAVES,
+      },
+    });
+
   } catch (err) {
-    res.status(500).json({ message: "Server error", error: err.message });
+    console.error("getUserFullDetails ERROR:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
   }
 };
 

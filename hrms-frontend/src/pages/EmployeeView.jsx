@@ -19,15 +19,19 @@ export default function EmployeeView() {
 
   const [limit, setLimit] = useState(50); // load more handler
 
-  const load = async () => {
-    try {
-      const r = await api.get(`/users/${id}/details`);
-      setEmp(r.data.user);
-    } catch (e) {
-      console.error(e);
-    }
-    setLoading(false);
-  };
+const load = async () => {
+  try {
+    const r = await api.get(`/users/${id}/details`);
+   setEmp({
+   ...r.data.user,
+    stats: r.data.stats,
+   });
+  } catch (e) {
+    console.error(e);
+  }
+  setLoading(false);
+};
+
 
   useEffect(() => {
     load();
@@ -140,20 +144,78 @@ function AttendanceSection({ emp, limit, setLimit }) {
 }
 
 function LeavesSection({ emp, limit, setLimit }) {
+  const leaves = emp.leaves || [];
+  const stats = emp.stats || {};
+
   return (
-    <Section title="Leave Summary">
-      <div className="grid sm:grid-cols-2 gap-4">
-        <InfoCard label="Total Leaves" value={emp.leaves.length} icon={<FiCalendar />} />
-        <InfoCard label="Approved" value={emp.leaves.filter(l => l.status === "APPROVED").length} icon={<FiCalendar />} />
+    <Section title="Leave Summary (Yearly)">
+      
+      {/* 🔥 KPI CARDS — SAME AS DASHBOARD */}
+      <div className="grid sm:grid-cols-4 gap-4">
+        <InfoCard
+          label="Applied Leaves"
+          value={stats.totalLeaves ?? 0}
+          icon={<FiCalendar />}
+        />
+        <InfoCard
+          label="Approved Leaves"
+          value={stats.approvedLeaves ?? 0}
+          icon={<FiCalendar />}
+        />
+        <InfoCard
+          label="WFH Days"
+          value={stats.wfhDays ?? 0}
+          icon={<FiClock />}
+        />
+        <InfoCard
+          label="Remaining"
+          value={`${stats.remainingLeaves ?? 0} / ${stats.yearlyQuota ?? 21}`}
+          icon={<FiCalendar />}
+        />
+
       </div>
 
+      {/* 🔥 LEAVE HISTORY */}
       <ListContainer>
-        {emp.leaves.slice(0, limit).map(l => (
-          <ListItem key={l.id} left={`${l.type} — ${l.status}`} right={l.startDate} />
-        ))}
+        {leaves
+          .slice(0, limit)
+          .map((l) => (
+            <ListItem
+              key={l.id}
+              left={
+                <div className="flex flex-col">
+                  <span className="font-semibold">
+                    {l.type === "HALF_DAY"
+                      ? "Half Day"
+                      : l.type === "WFH"
+                      ? "WFH"
+                      : "Leave"}
+                  </span>
+                  <span className="text-xs text-gray-500">
+                    {new Date(l.startDate).toLocaleDateString()}{" "}
+                    {l.endDate &&
+                      `→ ${new Date(l.endDate).toLocaleDateString()}`}
+                  </span>
+                </div>
+              }
+              right={
+                <span
+                  className={`px-2 py-1 rounded text-xs font-bold ${
+                    l.status === "APPROVED"
+                      ? "bg-green-200 text-green-800"
+                      : l.status === "REJECTED"
+                      ? "bg-red-200 text-red-800"
+                      : "bg-yellow-200 text-yellow-800"
+                  }`}
+                >
+                  {l.status}
+                </span>
+              }
+            />
+          ))}
       </ListContainer>
 
-      {limit < emp.leaves.length && (
+      {limit < leaves.length && (
         <LoadMoreButton onClick={() => setLimit(limit + 50)} />
       )}
     </Section>

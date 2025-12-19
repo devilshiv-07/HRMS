@@ -21,7 +21,7 @@ export const dashboard = async (req, res) => {
     const user = req.user;
 
     /* =====================================================
-       🔥 ADMIN DASHBOARD
+       🔥 ADMIN DASHBOARD (UNCHANGED)
     ====================================================== */
     if (user.role === "ADMIN") {
       const totalEmployees = await prisma.user.count({
@@ -34,10 +34,12 @@ export const dashboard = async (req, res) => {
         include: { users: true }
       });
 
-      const deptStats = deptWithUsers.map((d) => ({
-        name: d.name,
-        count: d.users.length
-      }));
+const deptStats = deptWithUsers.map((d) => ({
+  id: d.id,
+  name: d.name,
+  count: d.users?.length || 0
+}));
+
 
       const { start, end } = getTodayRange();
 
@@ -155,51 +157,137 @@ export const dashboard = async (req, res) => {
       });
     }
 
-    /* =====================================================
-       🔥 EMPLOYEE DASHBOARD  (FINAL + LEAVE/WFH FIX)
+ /* =====================================================
+       🔥 EMPLOYEE DASHBOARD — FINAL (MATCHES LEAVE CONTROLLER)
     ====================================================== */
 
     const uid = user.id;
 
-    // Fetch raw attendance
-    let myAttendance = await prisma.attendance.findMany({
+    /* ---------------- FETCH DATA ---------------- */
+    const allLeaves = await prisma.leave.findMany({
+      where: { userId: uid },
+      orderBy: { startDate: "asc" }
+    });
+
+    const rawAttendance = await prisma.attendance.findMany({
       where: { userId: uid },
       orderBy: { date: "asc" }
     });
 
-    const myLeaves = await prisma.leave.findMany({
-      where: { userId: uid, status: "APPROVED" },
-      orderBy: { startDate: "asc" }
-    });
+    /* ---------------- SAME HELPER AS LEAVES UI ---------------- */
+    const getUniqueLeaveUnits = (leaves) => {
+      const dayMap = {}; // { "2025-02-12": 1 | 0.5 }
 
-    // ⭐ Merge Leave + WFH days into attendance for calendar
-    myLeaves.forEach((l) => {
-      let cur = new Date(l.startDate);
-      const end = new Date(l.endDate);
+      leaves.forEach((l) => {
+        let cur = new Date(l.startDate);
+        const end = new Date(l.endDate);
+        const value = l.type === "HALF_DAY" ? 0.5 : 1;
 
-      while (cur <= end) {
-        const iso = cur.toISOString().slice(0, 10);
+        while (cur <= end) {
+          const iso = cur.toISOString().slice(0, 10);
+          dayMap[iso] = Math.max(dayMap[iso] || 0, value);
+          cur.setDate(cur.getDate() + 1);
+        }
+      });
 
-        myAttendance.push({
-          date: iso,
-          checkIn: false,
-          status: l.type === "WFH" ? "WFH" : "LEAVE"
-        });
+      return Object.values(dayMap).reduce((a, b) => a + b, 0);
+    };
 
-        cur.setDate(cur.getDate() + 1);
-      }
-    });
+    /* ---------------- YEAR RANGE (OVERLAP BASED ✅) ---------------- */
+    const currentYear = new Date().getFullYear();
+    const yearStart = new Date(`${currentYear}-01-01`);
+    const yearEnd   = new Date(`${currentYear}-12-31`);
 
-    // Sort final attendance list by date
-    myAttendance.sort((a, b) => new Date(a.date) - new Date(b.date));
+    /* ================= KPI VALUES ================= */
 
-    // KPIs
-    const presentDays = myAttendance.filter((a) => a.checkIn).length;
-    const wfhDays = myAttendance.filter((a) => a.status === "WFH").length;
+    // ✅ Applied Leave Days (NON-WFH)
+    const appliedLeaveDays = getUniqueLeaveUnits(
+      allLeaves.filter(
+        (l) =>
+          l.type !== "WFH" &&
+          new Date(l.startDate) <= yearEnd &&
+          new Date(l.endDate) >= yearStart
+      )
+    );
 
-    const actualLeaves = myLeaves.filter((l) => l.type !== "WFH");
-    const approvedLeaves = actualLeaves.filter((l) => l.status === "APPROVED").length;
-    const pendingLeaves = actualLeaves.filter((l) => l.status === "PENDING").length;
+    // ✅ Approved Leave Days (NON-WFH, NON-UNPAID)
+    const approvedLeaveDays = getUniqueLeaveUnits(
+      allLeaves.filter(
+        (l) =>
+          l.status === "APPROVED" &&
+          l.type !== "WFH" &&
+          l.type !== "UNPAID" &&
+          new Date(l.startDate) <= yearEnd &&
+          new Date(l.endDate) >= yearStart
+      )
+    );
+
+    // ✅ Applied WFH Days
+    const appliedWFHDays = getUniqueLeaveUnits(
+      allLeaves.filter(
+        (l) =>
+          l.type === "WFH" &&
+          new Date(l.startDate) <= yearEnd &&
+          new Date(l.endDate) >= yearStart
+      )
+    );
+
+    // ✅ Approved WFH Days
+    const approvedWFHDays = getUniqueLeaveUnits(
+      allLeaves.filter(
+        (l) =>
+          l.type === "WFH" &&
+          l.status === "APPROVED" &&
+          new Date(l.startDate) <= yearEnd &&
+          new Date(l.endDate) >= yearStart
+      )
+    );
+
+    /* ================= ATTENDANCE MERGE ================= */
+
+    const mergedAttendance = [...rawAttendance];
+
+    allLeaves
+      .filter((l) => l.status === "APPROVED")
+      .forEach((l) => {
+        let cur = new Date(l.startDate);
+        const end = new Date(l.endDate);
+
+        const status =
+          l.type === "WFH"
+            ? "WFH"
+            : l.type === "HALF_DAY"
+            ? "HALF_DAY"
+            : "LEAVE";
+
+        while (cur <= end) {
+          const iso = cur.toISOString().slice(0, 10);
+
+          const exists = mergedAttendance.some((a) => {
+            const d =
+              typeof a.date === "string"
+                ? a.date.slice(0, 10)
+                : a.date.toISOString().slice(0, 10);
+            return d === iso;
+          });
+
+          if (!exists) {
+            mergedAttendance.push({
+              date: iso,
+              checkIn: false,
+              status
+            });
+          }
+
+          cur.setDate(cur.getDate() + 1);
+        }
+      });
+
+    mergedAttendance.sort((a, b) => new Date(a.date) - new Date(b.date));
+
+    const presentDays = mergedAttendance.filter((a) => a.checkIn).length;
+
+    /* ================= PAYROLL + TREND ================= */
 
     const myPayroll = await prisma.payroll.findMany({
       where: { userId: uid },
@@ -207,29 +295,29 @@ export const dashboard = async (req, res) => {
       take: 6
     });
 
-    const now2 = new Date();
-    const last7e = new Date();
-    last7e.setDate(now2.getDate() - 7);
+    const now = new Date();
+    const last7 = new Date();
+    last7.setDate(now.getDate() - 7);
 
-    const myTrend = await prisma.attendance.findMany({
-      where: { userId: uid, date: { gte: last7e, lte: now2 } },
+    const attendanceTrend = await prisma.attendance.findMany({
+      where: { userId: uid, date: { gte: last7, lte: now } },
       orderBy: { date: "asc" }
     });
+
+    /* ================= RESPONSE ================= */
 
     return res.json({
       success: true,
       admin: false,
       stats: {
         presentDays,
-        totalLeaves: actualLeaves.length,
-        approvedLeaves,
-        pendingLeaves,
+        appliedLeaveDays,
+        approvedLeaveDays,
+        appliedWFHDays,
+        approvedWFHDays,
         payrollHistory: myPayroll,
-        attendanceTrend: myTrend,
-
-        // ⭐ Calendar Ready Data
-        attendance: myAttendance,
-        wfhDays
+        attendanceTrend,
+        attendance: mergedAttendance
       }
     });
 

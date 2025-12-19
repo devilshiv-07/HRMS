@@ -61,7 +61,8 @@ const SmallMonthCalendar = ({ attendance = [] }) => {
     attMap[iso] = {
       present: !!a.checkIn,
       wfh: a.status === "WFH",
-      leave: a.status === "LEAVE",
+      leave: a.status === "LEAVE" && a.status !== "HALF_DAY",
+      halfDay: a.status === "HALF_DAY",
     };
   });
 
@@ -107,12 +108,14 @@ const SmallMonthCalendar = ({ attendance = [] }) => {
           // 🌞 LIGHT MODE COLORS
           if (c.present) clsLight = "bg-green-200/40 border-green-500 text-green-700";
           else if (c.wfh) clsLight = "bg-blue-200/40 border-blue-500 text-blue-700";
+          else if (c.halfDay) clsLight = "bg-purple-200/40 border-purple-500 text-purple-700";
           else if (c.leave) clsLight = "bg-yellow-200/40 border-yellow-500 text-yellow-700";
           else if (c.isFuture) clsLight = "bg-gray-300/30 border-gray-400 text-gray-500";
           else clsLight = "bg-red-200/40 border-red-500 text-red-700";
 
           // 🌚 DARK MODE SOLID COLORS (visible)
           if (c.present) clsDark = "dark:bg-green-700 dark:border-green-400 dark:text-green-100";
+          if (c.halfDay) clsDark = "dark:bg-purple-700 dark:border-purple-400 dark:text-purple-100";
           else if (c.wfh) clsDark = "dark:bg-blue-700 dark:border-blue-400 dark:text-blue-100";
           else if (c.leave) clsDark = "dark:bg-yellow-700 dark:border-yellow-400 dark:text-yellow-100";
           else if (c.isFuture) clsDark = "dark:bg-gray-700 dark:border-gray-500 dark:text-gray-300";
@@ -215,6 +218,7 @@ const attendanceBar = useMemo(() => {
     present: 0,
     wfh: 0,
     leave: 0,
+    halfDay: 0,  
   }));
 
   data.stats.attendance.forEach((a) => {
@@ -224,13 +228,14 @@ const attendanceBar = useMemo(() => {
     if (a.checkIn) months[m].present += 1;
     if (a.status === "WFH") months[m].wfh += 1;
     if (a.status === "LEAVE") months[m].leave += 1;
+    if (a.status === "HALF_DAY") months[m].halfDay += 0.5;
   });
 
   // 🔥 REAL MAX VALUE
-  const maxValue = Math.max(
-    ...months.map((m) => Math.max(m.present, m.wfh, m.leave))
-  );
-
+const maxValue = Math.max(
+  ...months.map((m) => Math.max(m.present, m.wfh, m.leave, m.halfDay)
+  )
+);
   // 🔥 Y-axis ko perfect round banane ka logic
   let autoMax = Math.ceil((maxValue + 1) / 2) * 2;
   if (autoMax < 4) autoMax = 4; // minimum 4
@@ -240,23 +245,28 @@ const attendanceBar = useMemo(() => {
       "Jan", "Feb", "Mar", "Apr", "May", "Jun",
       "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
     ],
-    datasets: [
-      {
-        label: "Present",
-        data: months.map((m) => m.present),
-        backgroundColor: "#10B981",
-      },
-      {
-        label: "WFH",
-        data: months.map((m) => m.wfh),
-        backgroundColor: "#3B82F6",
-      },
-      {
-        label: "Leave",
-        data: months.map((m) => m.leave),
-        backgroundColor: "#FACC15",
-      }
-    ],
+datasets: [
+  {
+    label: "Present",
+    data: months.map((m) => m.present),
+    backgroundColor: "#10B981",
+  },
+  {
+    label: "Leave",
+    data: months.map((m) => m.leave),
+    backgroundColor: "#FACC15",
+  },
+  {
+    label: "Half Day",
+    data: months.map((m) => m.halfDay),
+    backgroundColor: "#A855F7", // 🟣 PURPLE
+  },
+  {
+    label: "WFH",
+    data: months.map((m) => m.wfh),
+    backgroundColor: "#3B82F6",
+  }
+],
     autoMax,
   };
 }, [data]);
@@ -270,17 +280,21 @@ const attendanceBar = useMemo(() => {
     />
   );
 
-  const InfoBox = ({ title, subtitle, icon }) => (
-    <div className="flex items-center gap-4 p-4 bg-white/70 dark:bg-gray-800/50 rounded-2xl shadow">
-      <div className="w-12 h-12 rounded-lg bg-indigo-500 text-white flex items-center justify-center font-bold">
-        {icon}
+const InfoBox = ({ title, subtitle, icon }) => (
+  <div className="flex items-center gap-4 p-4 min-h-[90px] bg-white/70 dark:bg-gray-800/50 rounded-2xl shadow">
+    <div className="w-12 h-12 shrink-0 rounded-lg bg-indigo-500 text-white flex items-center justify-center font-bold">
+      {icon}
+    </div>
+    <div className="min-w-0">
+      <div className="text-sm text-gray-500 dark:text-gray-300 leading-tight">
+        {title}
       </div>
-      <div>
-        <div className="text-sm text-gray-500 dark:text-gray-300">{title}</div>
-        <div className="text-xl font-semibold">{subtitle}</div>
+      <div className="text-xl font-semibold truncate">
+        {subtitle}
       </div>
     </div>
-  );
+  </div>
+);
 
   const MessageBar = ({ msg }) => {
     if (!msg) return null;
@@ -343,7 +357,7 @@ const attendanceBar = useMemo(() => {
         <div className="lg:col-span-8 space-y-6">
           
           {/* KPI ROW */}
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
             {loading ? (
               <>
                 <Skeleton className="h-20" />
@@ -354,9 +368,24 @@ const attendanceBar = useMemo(() => {
             ) : (
               <>
                 <InfoBox title="Days Present" subtitle={data.stats.presentDays} icon="✓" />
-                <InfoBox title="Total Leaves" subtitle={data.stats.totalLeaves} icon="L" />
-                <InfoBox title="Approved Leaves" subtitle={data.stats.approvedLeaves} icon="A" />
-                <InfoBox title="WFH Days" subtitle={data.stats.wfhDays || 0} icon="W" />
+                <InfoBox
+  title="Total Leaves + Half_days Applied"
+  subtitle={data.stats.appliedLeaveDays}
+  icon="L"
+/>
+
+<InfoBox
+  title="Approved Leaves + Half_days"
+  subtitle={data.stats.approvedLeaveDays}
+  icon="A"
+/>
+
+<InfoBox
+  title="WFH Days"
+  subtitle={data.stats.appliedWFHDays}
+  icon="W"
+/>
+
               </>
             )}
           </div>
