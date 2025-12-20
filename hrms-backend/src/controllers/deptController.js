@@ -1,25 +1,12 @@
 import prisma from "../prismaClient.js";
 
-/* ----------------------------------------------------
-   LIST DEPARTMENTS (Role Based)
----------------------------------------------------- */
-export const listDepartments = async (req, res) => {
-  try {
-    const user = req.user;
-
-    let departments;
-
-    const baseInclude = {
-      users: {
-        select: {
-          id: true,
-          firstName: true,
-          lastName: true,
-          email: true,
-          role: true
-        }
-      },
-      manager: {
+/* ====================================================
+   COMMON INCLUDE (SINGLE SOURCE OF TRUTH)
+==================================================== */
+const departmentInclude = {
+  members: {
+    include: {
+      user: {
         select: {
           id: true,
           firstName: true,
@@ -28,42 +15,55 @@ export const listDepartments = async (req, res) => {
           role: true
         }
       }
-    };
-
-    // ADMIN → sees all departments
-    if (user.role === "ADMIN") {
-      departments = await prisma.department.findMany({
-        include: baseInclude,
-        orderBy: { name: "asc" },
-      });
-
-      return res.json({ success: true, departments });
     }
+  },
+  managers: {
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      email: true,
+      role: true
+    }
+  }
+};
 
-    // EMPLOYEE → sees only their department
-    departments = await prisma.department.findMany({
-      where: {
-        users: { some: { id: user.id } }
-      },
-      include: baseInclude,
+/* ====================================================
+   LIST DEPARTMENTS
+==================================================== */
+export const listDepartments = async (req, res) => {
+  try {
+    const user = req.user;
+
+    const where =
+      user.role === "ADMIN"
+        ? {}
+        : {
+            OR: [
+              { members: { some: { userId: user.id } } },
+              { managers: { some: { id: user.id } } }
+            ]
+          };
+
+    const departments = await prisma.department.findMany({
+      where,
+      include: departmentInclude,
       orderBy: { name: "asc" }
     });
 
     return res.json({ success: true, departments });
-
   } catch (error) {
     console.error("listDepartments ERROR:", error);
     return res.status(500).json({
       success: false,
-      message: "Internal server error"
+      message: "Failed to load departments"
     });
   }
 };
 
-
-/* ----------------------------------------------------
+/* ====================================================
    CREATE DEPARTMENT
----------------------------------------------------- */
+==================================================== */
 export const createDepartment = async (req, res) => {
   try {
     if (req.user.role !== "ADMIN") {
@@ -73,57 +73,41 @@ export const createDepartment = async (req, res) => {
       });
     }
 
-    const { name, managerId } = req.body;
+    let { name, managerIds = [] } = req.body;
+    name = name?.trim();
 
-    if (!name)
+    if (!name) {
       return res.status(400).json({
         success: false,
-        message: "Name is required"
+        message: "Department name is required"
       });
-
-    // Validate manager
-    if (managerId) {
-      const manager = await prisma.user.findUnique({ where: { id: managerId } });
-
-      if (!manager)
-        return res.status(400).json({
-          success: false,
-          message: "Manager not found"
-        });
-
-      if (manager.role === "ADMIN")
-        return res.status(400).json({
-          success: false,
-          message: "Admin cannot be a department manager"
-        });
     }
 
-    const dep = await prisma.department.create({
-      data: { name, managerId: managerId || null },
-    });
+    // remove duplicate manager ids
+    managerIds = [...new Set(managerIds)];
 
-    const department = await prisma.department.findUnique({
-      where: { id: dep.id },
-      include: {
-        users: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-            email: true,
-            role: true
-          }
-        },
-        manager: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-            email: true,
-            role: true
-          }
-        }
+    // validate managers
+    for (const id of managerIds) {
+      const manager = await prisma.user.findUnique({
+        where: { id }
+      });
+
+      if (!manager || manager.role === "ADMIN") {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid manager selected"
+        });
       }
+    }
+
+    const department = await prisma.department.create({
+      data: {
+        name,
+        managers: {
+          connect: managerIds.map((id) => ({ id }))
+        }
+      },
+      include: departmentInclude
     });
 
     return res.json({
@@ -135,11 +119,12 @@ export const createDepartment = async (req, res) => {
   } catch (error) {
     console.error("createDepartment ERROR:", error);
 
-    if (error.code === "P2002")
+    if (error.code === "P2002") {
       return res.status(400).json({
         success: false,
         message: "Department name already exists"
       });
+    }
 
     return res.status(500).json({
       success: false,
@@ -148,10 +133,9 @@ export const createDepartment = async (req, res) => {
   }
 };
 
-
-/* ----------------------------------------------------
+/* ====================================================
    UPDATE DEPARTMENT
----------------------------------------------------- */
+==================================================== */
 export const updateDepartment = async (req, res) => {
   try {
     if (req.user.role !== "ADMIN") {
@@ -162,69 +146,45 @@ export const updateDepartment = async (req, res) => {
     }
 
     const { id } = req.params;
-    const { name, managerId } = req.body;
+    let { name, managerIds = [] } = req.body;
+    name = name?.trim();
 
-    // Validate manager
-    if (managerId) {
-      const manager = await prisma.user.findUnique({ where: { id: managerId } });
+    const existing = await prisma.department.findUnique({
+      where: { id }
+    });
 
-      if (!manager)
-        return res.status(400).json({
-          success: false,
-          message: "Manager not found"
-        });
-
-      if (manager.role === "ADMIN")
-        return res.status(400).json({
-          success: false,
-          message: "Admin cannot be a department manager"
-        });
+    if (!existing) {
+      return res.status(404).json({
+        success: false,
+        message: "Department not found"
+      });
     }
+
+    managerIds = [...new Set(managerIds)];
 
     await prisma.department.update({
       where: { id },
-      data: { name, managerId: managerId || null },
-    });
-
-    const department = await prisma.department.findUnique({
-      where: { id },
-      include: {
-        users: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-            email: true,
-            role: true
-          }
-        },
-        manager: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-            email: true,
-            role: true
-          }
+      data: {
+        ...(name && { name }),
+        managers: {
+          set: managerIds.map((id) => ({ id }))
         }
       }
     });
 
+    const department = await prisma.department.findUnique({
+      where: { id },
+      include: departmentInclude
+    });
+
     return res.json({
       success: true,
-      message: "Department updated",
+      message: "Department updated successfully",
       department
     });
 
   } catch (error) {
     console.error("updateDepartment ERROR:", error);
-
-    if (error.code === "P2002")
-      return res.status(400).json({
-        success: false,
-        message: "Department name already exists"
-      });
-
     return res.status(500).json({
       success: false,
       message: "Internal server error"
@@ -232,10 +192,9 @@ export const updateDepartment = async (req, res) => {
   }
 };
 
-
-/* ----------------------------------------------------
+/* ====================================================
    DELETE DEPARTMENT
----------------------------------------------------- */
+==================================================== */
 export const deleteDepartment = async (req, res) => {
   try {
     if (req.user.role !== "ADMIN") {
@@ -247,13 +206,30 @@ export const deleteDepartment = async (req, res) => {
 
     const { id } = req.params;
 
-    await prisma.department.delete({ where: { id } });
+    const existing = await prisma.department.findUnique({
+      where: { id }
+    });
+
+    if (!existing) {
+      return res.status(404).json({
+        success: false,
+        message: "Department not found"
+      });
+    }
+
+    // 🟢 CLEAN JOIN TABLE (VERY IMPORTANT)
+    await prisma.userDepartment.deleteMany({
+      where: { departmentId: id }
+    });
+
+    await prisma.department.delete({
+      where: { id }
+    });
 
     return res.json({
       success: true,
       message: "Department deleted successfully"
     });
-
   } catch (error) {
     console.error("deleteDepartment ERROR:", error);
     return res.status(500).json({

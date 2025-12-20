@@ -19,10 +19,10 @@ export default function Departments() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editDep, setEditDep] = useState(null);
 
-  const [form, setForm] = useState({
-    name: "",
-    managerId: "",
-  });
+const [form, setForm] = useState({
+  name: "",
+  managerIds: [],
+});
 
   const getFullName = (u) => `${u.firstName} ${u.lastName || ""}`.trim();
 
@@ -55,19 +55,19 @@ export default function Departments() {
   }, []);
 
   /* ---- CREATE MODAL ---- */
-  const openCreate = () => {
-    setEditDep(null);
-    setForm({ name: "", managerId: "" });
-    setModalOpen(true);
-  };
+const openCreate = () => {
+  setEditDep(null);
+  setForm({ name: "", managerIds: [] }); // ✅ correct
+  setModalOpen(true);
+};
 
   /* ---- EDIT MODAL ---- */
   const openEdit = (d) => {
     setEditDep(d);
-    setForm({
-      name: d.name,
-      managerId: d.manager?.id || "",
-    });
+setForm({
+  name: d.name,
+  managerIds: d.managers?.map((m) => m.id) || [],
+});
     setModalOpen(true);
   };
 
@@ -76,11 +76,17 @@ export default function Departments() {
     e.preventDefault();
     try {
       if (editDep) {
-        await api.put(`/departments/${editDep.id}`, form);
+       await api.put(`/departments/${editDep.id}`, {
+  name: form.name,
+  managerIds: form.managerIds,
+});
         setMsg("Department updated successfully");
         setMsgType("success");
       } else {
-        await api.post(`/departments`, form);
+        await api.post("/departments", {
+  name: form.name,
+  managerIds: form.managerIds,
+});
         setMsg("Department created successfully");
         setMsgType("success");
       }
@@ -161,7 +167,11 @@ export default function Departments() {
                   <p className="text-lg font-semibold">{d.name}</p>
 
                   <p className="text-sm text-gray-600 dark:text-gray-300">
-                    Manager: {d.manager ? getFullName(d.manager) : "—"}
+                    Manager:{" "}
+{d.managers && d.managers.length > 0
+  ? d.managers.map((m) => getFullName(m)).join(", ")
+  : "—"}
+
                   </p>
                 </div>
 
@@ -279,19 +289,25 @@ function DepartmentForm({ submit, close, form, setForm, editDep, users, getFullN
           onChange={(e) => update("name", e.target.value)}
         />
 
-        <select
-          className="input"
-          value={form.managerId}
-          onChange={(e) => update("managerId", e.target.value)}
-        >
-          <option value="">Select Manager (optional)</option>
-
-          {users.map((u) => (
-            <option key={u.id} value={u.id}>
-              {getFullName(u)} ({u.role})
-            </option>
-          ))}
-        </select>
+    <select
+  multiple
+  className="input"
+  value={form.managerIds}
+  onChange={(e) =>
+    setForm((prev) => ({
+      ...prev,
+      managerIds: Array.from(e.target.selectedOptions).map(
+        (o) => o.value
+      ),
+    }))
+  }
+>
+  {users.map((u) => (
+    <option key={u.id} value={u.id}>
+      {getFullName(u)} ({u.role})
+    </option>
+  ))}
+</select>
 
         <div className="flex justify-end gap-3 pt-3">
           <button

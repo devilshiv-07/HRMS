@@ -2,7 +2,7 @@ import jwt from 'jsonwebtoken';
 import prisma from '../prismaClient.js';
 import ms from 'ms';
 
-const accessExpires = process.env.ACCESS_TOKEN_EXPIRES_IN || '15m';
+const accessExpires = process.env.ACCESS_TOKEN_EXPIRES_IN || '60m';
 const refreshExpires = process.env.REFRESH_TOKEN_EXPIRES_IN || '7d';
 
 export function signAccessToken(userId) {

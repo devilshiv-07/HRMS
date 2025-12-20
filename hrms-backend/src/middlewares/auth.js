@@ -21,7 +21,7 @@ export const requireAuth = (allowedRoles = []) => {
       }
 
       // 🟢 Use payload.sub → because tokens were signed with { sub: userId }
-      const userId = payload.sub;
+      const userId = payload.sub || payload.id;
 
       if (!userId) {
         return res.status(401).json({ message: "Invalid token payload" });

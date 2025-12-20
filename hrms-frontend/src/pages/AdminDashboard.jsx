@@ -425,12 +425,14 @@ const attendanceLine = useMemo(() => {
     <div className="text-xs text-gray-500">No one is on leave today.</div>
   )}
 
+<div className="max-h-48 sm:max-h-60 overflow-y-auto pr-2 space-y-2">
   {data.stats.leavesToday
     ?.filter((l) => l.type.toLowerCase() !== "wfh")
     .map((l) => (
-      <div
+      <div 
         key={l.id}
-        className="flex flex-col sm:flex-row sm:items-center sm:justify-between py-2 border-b dark:border-gray-700 gap-1 sm:gap-0"
+        className="flex flex-col sm:flex-row sm:items-center sm:justify-between 
+        py-2 border-b dark:border-gray-700 gap-1 sm:gap-0"
       >
         <div className="min-w-0">
           <div className="text-xs sm:text-sm font-medium truncate">
@@ -447,6 +449,7 @@ const attendanceLine = useMemo(() => {
         </div>
       </div>
     ))}
+</div> 
 </div>
               </>
             )}

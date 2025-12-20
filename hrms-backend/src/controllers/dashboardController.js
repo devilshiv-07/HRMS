@@ -23,139 +23,171 @@ export const dashboard = async (req, res) => {
     /* =====================================================
        🔥 ADMIN DASHBOARD (UNCHANGED)
     ====================================================== */
-    if (user.role === "ADMIN") {
-      const totalEmployees = await prisma.user.count({
-        where: { role: { in: ["AGILITY_EMPLOYEE", "LYF_EMPLOYEE"] } }
-      });
+   if (user.role === "ADMIN") {
+  const totalEmployees = await prisma.user.count({
+    where: { role: { in: ["AGILITY_EMPLOYEE", "LYF_EMPLOYEE"] } }
+  });
 
-      const totalDepartments = await prisma.department.count();
+  const totalDepartments = await prisma.department.count();
 
-      const deptWithUsers = await prisma.department.findMany({
-        include: { users: true }
-      });
+  /* ===================== FIXED: DEPARTMENT EMPLOYEE COUNT ===================== */
+   const deptStatsRaw = await prisma.department.findMany({
+    select: {
+      id: true,
+      name: true,
 
-const deptStats = deptWithUsers.map((d) => ({
-  id: d.id,
-  name: d.name,
-  count: d.users?.length || 0
-}));
-
-
-      const { start, end } = getTodayRange();
-
-      const todayAttendance = await prisma.attendance.findMany({
-        where: { date: { gte: start, lte: end } },
-        include: { user: true }
-      });
-
-      const presentToday = todayAttendance.filter((a) => a.checkIn).length;
-      const wfhToday = todayAttendance.filter((a) => a.status === "WFH").length;
-      const absentToday = totalEmployees - (presentToday + wfhToday);
-
-      const leaveSummary = await prisma.leave.groupBy({
-        by: ["status"],
-        _count: { id: true }
-      });
-
-      const agilityEmployees = await prisma.user.count({
-        where: { role: "AGILITY_EMPLOYEE" }
-      });
-
-      const lyfEmployees = await prisma.user.count({
-        where: { role: "LYF_EMPLOYEE" }
-      });
-
-      const payrollLast = await prisma.payroll.findMany({
-        orderBy: { salaryMonth: "desc" },
-        take: 12
-      });
-
-      const payrollSummary = payrollLast.reduce(
-        (acc, p) => {
-          acc.totalBase += p.baseSalary;
-          acc.totalBonus += p.bonus;
-          acc.totalDeduction += p.deductions;
-          acc.totalNet += p.netSalary;
-          return acc;
-        },
-        { totalBase: 0, totalBonus: 0, totalDeduction: 0, totalNet: 0 }
-      );
-
-      const now = new Date();
-      const last7 = new Date();
-      last7.setDate(now.getDate() - 7);
-
-      const attendanceTrend = await prisma.attendance.findMany({
-        where: { date: { gte: last7, lte: now } },
-        include: { user: true },
-        orderBy: { date: "asc" }
-      });
-
-      const attendanceTrendFormatted = attendanceTrend.map((a) => ({
-        ...a,
-        dateFormatted: new Date(a.date).toLocaleDateString()
-      }));
-
-      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-
-      const leavesTrend = await prisma.leave.findMany({
-        where: { startDate: { gte: monthStart } },
-        include: { user: true }
-      });
-
-      const leavesTrendFormatted = leavesTrend.map((l) => ({
-        ...l,
-        dateFormatted: new Date(l.startDate).toLocaleDateString()
-      }));
-
-      const leavesToday = await prisma.leave.findMany({
-        where: {
-          startDate: { lte: end },
-          endDate: { gte: start }
-        },
-        include: { user: true }
-      });
-
-      const leavesTodayFormatted = leavesToday.map((l) => ({
-        ...l,
-        days:
-          Math.floor(
-            (new Date(l.endDate) - new Date(l.startDate)) /
-            (1000 * 60 * 60 * 24)
-          ) + 1,
-        startDateFormatted: new Date(l.startDate).toLocaleDateString()
-      }));
-
-      const wfhTodayList = todayAttendance
-        .filter((a) => a.status === "WFH")
-        .map((a) => ({
-          ...a,
-          dateFormatted: new Date(a.date).toLocaleDateString()
-        }));
-
-      return res.json({
-        success: true,
-        admin: true,
-        stats: {
-          totalEmployees,
-          totalDepartments,
-          presentToday,
-          wfhToday,
-          absentToday,
-          leaveSummary,
-          payrollSummary,
-          companyWise: {
-            agility: agilityEmployees,
-            lyfshilp: lyfEmployees
-          },
-          departments: deptStats,
-          attendanceTrend: attendanceTrendFormatted,
-          leavesTrend: leavesTrendFormatted,
-          leavesToday: leavesTodayFormatted,
-          wfhToday: wfhTodayList
+      // 👥 Employees (multi-department mapping)
+      members: {
+        select: {
+          userId: true
         }
-      });
+      },
+
+      // 👔 Managers (department managers)
+      managers: {
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true
+        }
+      }
+    },
+    orderBy: { name: "asc" }
+  });
+
+  const deptStats = deptStatsRaw.map((d) => {
+    // 🔑 Unique users (members + managers)
+    const userSet = new Set();
+
+    d.members.forEach((m) => userSet.add(m.userId));
+    d.managers.forEach((m) => userSet.add(m.id));
+
+    return {
+      id: d.id,
+      name: d.name,
+      count: userSet.size, // ✅ FINAL CORRECT COUNT
+      managers: d.managers.map(
+        (m) => `${m.firstName} ${m.lastName || ""}`.trim()
+      )
+    };
+  });
+  /* =========================================================================== */
+
+  const { start, end } = getTodayRange();
+
+  const todayAttendance = await prisma.attendance.findMany({
+    where: { date: { gte: start, lte: end } },
+    include: { user: true }
+  });
+
+  const presentToday = todayAttendance.filter((a) => a.checkIn).length;
+  const wfhToday = todayAttendance.filter((a) => a.status === "WFH").length;
+  const absentToday = totalEmployees - (presentToday + wfhToday);
+
+  const leaveSummary = await prisma.leave.groupBy({
+    by: ["status"],
+    _count: { id: true }
+  });
+
+  const agilityEmployees = await prisma.user.count({
+    where: { role: "AGILITY_EMPLOYEE" }
+  });
+
+  const lyfEmployees = await prisma.user.count({
+    where: { role: "LYF_EMPLOYEE" }
+  });
+
+  const payrollLast = await prisma.payroll.findMany({
+    orderBy: { salaryMonth: "desc" },
+    take: 12
+  });
+
+  const payrollSummary = payrollLast.reduce(
+    (acc, p) => {
+      acc.totalBase += p.baseSalary;
+      acc.totalBonus += p.bonus;
+      acc.totalDeduction += p.deductions;
+      acc.totalNet += p.netSalary;
+      return acc;
+    },
+    { totalBase: 0, totalBonus: 0, totalDeduction: 0, totalNet: 0 }
+  );
+
+  const now = new Date();
+  const last7 = new Date();
+  last7.setDate(now.getDate() - 7);
+
+  const attendanceTrend = await prisma.attendance.findMany({
+    where: { date: { gte: last7, lte: now } },
+    include: { user: true },
+    orderBy: { date: "asc" }
+  });
+
+  const attendanceTrendFormatted = attendanceTrend.map((a) => ({
+    ...a,
+    dateFormatted: new Date(a.date).toLocaleDateString()
+  }));
+
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+  const leavesTrend = await prisma.leave.findMany({
+    where: { startDate: { gte: monthStart } },
+    include: { user: true }
+  });
+
+  const leavesTrendFormatted = leavesTrend.map((l) => ({
+    ...l,
+    dateFormatted: new Date(l.startDate).toLocaleDateString()
+  }));
+
+  const leavesToday = await prisma.leave.findMany({
+    where: {
+      startDate: { lte: end },
+      endDate: { gte: start }
+    },
+    include: { user: true }
+  });
+
+  const leavesTodayFormatted = leavesToday.map((l) => ({
+    ...l,
+    days:
+      Math.floor(
+        (new Date(l.endDate) - new Date(l.startDate)) /
+        (1000 * 60 * 60 * 24)
+      ) + 1,
+    startDateFormatted: new Date(l.startDate).toLocaleDateString()
+  }));
+
+  const wfhTodayList = todayAttendance
+    .filter((a) => a.status === "WFH")
+    .map((a) => ({
+      ...a,
+      dateFormatted: new Date(a.date).toLocaleDateString()
+    }));
+
+  return res.json({
+    success: true,
+    admin: true,
+    stats: {
+      totalEmployees,
+      totalDepartments,
+      presentToday,
+      wfhToday,
+      absentToday,
+      leaveSummary,
+      payrollSummary,
+      companyWise: {
+        agility: agilityEmployees,
+        lyfshilp: lyfEmployees
+      },
+      departments: deptStats, // ✅ FIXED DATA
+      attendanceTrend: attendanceTrendFormatted,
+      leavesTrend: leavesTrendFormatted,
+      leavesToday: leavesTodayFormatted,
+      wfhToday: wfhTodayList
     }
+  });
+}
 
  /* =====================================================
        🔥 EMPLOYEE DASHBOARD — FINAL (MATCHES LEAVE CONTROLLER)

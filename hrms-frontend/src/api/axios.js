@@ -9,7 +9,7 @@ const getBaseURL = () => {
 
 const api = axios.create({
   baseURL: getBaseURL(),
-  withCredentials: true, // 🔥 REQUIRED for refresh token cookie
+  // ❌ withCredentials REMOVED (Option A)
 });
 
 // ------------------------------------------
@@ -54,8 +54,13 @@ api.interceptors.response.use(
       isRefreshing = true;
 
       try {
-        // 🔥 Refresh token is sent automatically from HttpOnly cookie
-        const response = await api.get("/auth/refresh");
+        // ✅ Refresh token from localStorage (Option A)
+        const refreshToken = localStorage.getItem("hrms_refresh");
+
+        const response = await axios.post(
+          `${getBaseURL()}/auth/refresh`,
+          { refreshToken }
+        );
 
         const { accessToken } = response.data;
 
@@ -75,6 +80,7 @@ api.interceptors.response.use(
         isRefreshing = false;
 
         localStorage.removeItem("hrms_access");
+        localStorage.removeItem("hrms_refresh");
 
         window.location.href = "/login";
         throw error;

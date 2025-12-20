@@ -7,44 +7,83 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+/**
+ * ===================== USER =====================
+ */
 model User {
-  id             String          @id @default(uuid())
-  email          String          @unique
-  password       String
-  firstName      String
-  lastName       String?
-  role           Role            @default(AGILITY_EMPLOYEE)
-  isActive       Boolean         @default(true)
-  departmentId   String?
-  position       String?
-  salary         Float?
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
+  id        String  @id @default(uuid())
+  email     String  @unique
+  password  String
+  firstName String
+  lastName  String?
+  role      Role    @default(AGILITY_EMPLOYEE)
+  isActive  Boolean @default(true)
+
+  // 🔴 OLD (KEEP — SAFE)
+  departmentId String?
+  department   Department? @relation("DepartmentUsers", fields: [departmentId], references: [id])
+
+  // 🟢 NEW (MULTI-DEPARTMENT SUPPORT)
+  departments UserDepartment[]
+
+  position  String?
+  salary    Float?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
   reimbursements Reimbursement[]
   attendances    Attendance[]
-  managedDept    Department?     @relation("DepartmentManager")
   approvals      Leave[]         @relation("LeaveApprover")
   leaves         Leave[]
   notifications  Notification[]
   payrolls       Payroll[]
   refreshTokens  RefreshToken[]
-  department     Department?     @relation("DepartmentUsers", fields: [departmentId], references: [id])
+
+  // 🟢 MANAGER OF MULTIPLE DEPARTMENTS (SAFE)
+  managedDepartments Department[] @relation("DepartmentManagers")
 
   @@map("users")
 }
 
+/**
+ * ===================== DEPARTMENT =====================
+ */
 model Department {
   id        String   @id @default(uuid())
   name      String   @unique
-  managerId String?  @unique
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  manager   User?    @relation("DepartmentManager", fields: [managerId], references: [id])
-  users     User[]   @relation("DepartmentUsers")
+
+  // 🔴 OLD (KEEP)
+  users User[] @relation("DepartmentUsers")
+
+  // 🟢 NEW (MULTI-MANAGER SUPPORT)
+  managers User[] @relation("DepartmentManagers")
+
+  // 🟢 NEW (MULTI-DEPARTMENT MEMBERS)
+  members UserDepartment[]
 
   @@map("departments")
 }
 
+/**
+ * ===================== USER ↔ DEPARTMENT (JOIN TABLE) =====================
+ */
+model UserDepartment {
+  id           String @id @default(uuid())
+  userId       String
+  departmentId String
+
+  user       User       @relation(fields: [userId], references: [id])
+  department Department @relation(fields: [departmentId], references: [id])
+
+  @@unique([userId, departmentId])
+  @@map("user_departments")
+}
+
+/**
+ * ===================== ATTENDANCE =====================
+ */
 model Attendance {
   id        String    @id @default(uuid())
   userId    String
@@ -55,37 +94,41 @@ model Attendance {
   note      String?
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
-  user      User      @relation(fields: [userId], references: [id])
+
+  user User @relation(fields: [userId], references: [id])
 
   @@index([userId, date])
   @@map("attendances")
 }
 
+/**
+ * ===================== LEAVE =====================
+ */
 model Leave {
-  id          String    @id @default(uuid())
-  user        User      @relation(fields: [userId], references: [id])
-  userId      String
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
 
-  type        LeaveType
-  startDate   DateTime
-  endDate     DateTime
-  reason      String?
+  type         LeaveType
+  startDate    DateTime
+  endDate      DateTime
+  reason       String?
+  rejectReason String?
+  status       String    @default("PENDING")
 
-  rejectReason String?   // ⭐ NEW FIELD
+  approverId String?
+  approver   User?   @relation("LeaveApprover", fields: [approverId], references: [id])
 
-  status      String    @default("PENDING")
-
-  approverId  String?
-  approver    User?     @relation("LeaveApprover", fields: [approverId], references: [id])
-
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([userId, startDate, endDate])
   @@map("leaves")
 }
 
-
+/**
+ * ===================== PAYROLL =====================
+ */
 model Payroll {
   id          String   @id @default(uuid())
   userId      String
@@ -97,43 +140,50 @@ model Payroll {
   slipUrl     String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
-  user        User     @relation(fields: [userId], references: [id])
+
+  user User @relation(fields: [userId], references: [id])
 
   @@index([userId, salaryMonth])
   @@map("payrolls")
 }
 
+/**
+ * ===================== REIMBURSEMENT =====================
+ */
 model Reimbursement {
-  id          String               @id @default(uuid())
-  userId      String
-  user        User                 @relation(fields: [userId], references: [id])
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
 
-  title       String
-  description String?
-  totalAmount Float
+  title        String
+  description  String?
+  totalAmount  Float
+  status       ReimbursementStatus @default(PENDING)
+  rejectReason String?
 
-  status      ReimbursementStatus  @default(PENDING)
-
-  rejectReason String?   // ⭐ NEW FIELD
-
-  createdAt   DateTime             @default(now())
-
-  bills       Bill[]
-
-  // Existing flags
   isEmployeeDeleted Boolean @default(false)
   isAdminDeleted    Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  bills     Bill[]
 }
 
+/**
+ * ===================== BILL =====================
+ */
 model Bill {
-  id              String        @id @default(uuid())
+  id              String  @id @default(uuid())
   reimbursementId String
   fileUrl         String
   amount          Float
   note            String?
-  reimbursement   Reimbursement @relation(fields: [reimbursementId], references: [id])
+
+  reimbursement Reimbursement @relation(fields: [reimbursementId], references: [id])
 }
 
+/**
+ * ===================== NOTIFICATION =====================
+ */
 model Notification {
   id        String   @id @default(uuid())
   userId    String
@@ -141,14 +191,17 @@ model Notification {
   body      String
   isRead    Boolean  @default(false)
   meta      Json?
-  createdAt DateTime @default(now())
-  /// NEW FIELD → Track which employees have read the notification
   readByIds String[] @default([])
-  user      User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
 
   @@map("notifications")
 }
 
+/**
+ * ===================== REFRESH TOKEN =====================
+ */
 model RefreshToken {
   id        String   @id @default(uuid())
   token     String   @unique
@@ -156,11 +209,15 @@ model RefreshToken {
   revoked   Boolean  @default(false)
   expiresAt DateTime
   createdAt DateTime @default(now())
-  user      User     @relation(fields: [userId], references: [id])
+
+  user User @relation(fields: [userId], references: [id])
 
   @@map("refresh_tokens")
 }
 
+/**
+ * ===================== ENUMS =====================
+ */
 enum Role {
   ADMIN
   AGILITY_EMPLOYEE
@@ -173,7 +230,7 @@ enum LeaveType {
   SICK
   CASUAL
   WFH
-  HALF_DAY   // 🟣 NEW
+  HALF_DAY
 }
 
 enum ReimbursementStatus {

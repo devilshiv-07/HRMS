@@ -35,6 +35,7 @@ export default function Employees() {
     email: "",
     role: "AGILITY_EMPLOYEE",
     departmentId: "",
+    departmentIds: [],
     password: "",
   };
   const [form, setForm] = useState(emptyForm);
@@ -84,6 +85,7 @@ export default function Employees() {
       email: u.email,
       role: u.role,
       departmentId: u.departmentId || "",
+      departmentIds: u.departments?.map(d => d.department.id) || [],
       password: "",
     });
     setErrorMsg("");
@@ -291,7 +293,10 @@ function EmployeesTable({ users, askDelete, openEdit, me, departments, navigate 
 
             <p className="text-sm text-gray-700 dark:text-gray-300">
               <strong>Department:</strong>{" "}
-              {departments.find((d) => d.id === u.departmentId)?.name || "-"}
+              {u.departments?.length
+  ? u.departments.map(d => d.department.name).join(", ")
+  : departments.find(dep => dep.id === u.departmentId)?.name || "-"}
+
             </p>
 
             {me?.role === "ADMIN" && (
@@ -352,7 +357,10 @@ function EmployeesTable({ users, askDelete, openEdit, me, departments, navigate 
                 <td className="p-3 text-sm whitespace-nowrap">{u.role}</td>
 
                 <td className="p-3 text-sm whitespace-nowrap">
-                  {departments.find((d) => d.id === u.departmentId)?.name || "-"}
+                {u.departments?.length
+  ? u.departments.map(d => d.department.name).join(", ")
+  : departments.find(dep => dep.id === u.departmentId)?.name || "-"}
+
                 </td>
 
                 {me?.role === "ADMIN" && (
@@ -443,18 +451,46 @@ function UserForm({ form, setForm, submit, close, editUser, errorMsg, me, depart
           </select>
         )}
 
-        <select
-          className="input"
-          value={form.departmentId}
-          onChange={(e) => update("departmentId", e.target.value)}
-        >
-          <option value="">Select Department</option>
-          {departments.map((dep) => (
-            <option key={dep.id} value={dep.id}>
-              {dep.name}
-            </option>
-          ))}
-        </select>
+{form.role !== "ADMIN" && (
+  <div className="space-y-2">
+    <label className="text-sm text-gray-600 dark:text-gray-300">
+      Departments
+    </label>
+
+    <div className="border rounded-lg p-3 max-h-40 overflow-y-auto bg-gray-50 dark:bg-gray-800">
+      {departments.map((dep) => {
+        const checked = form.departmentIds.includes(dep.id);
+
+        return (
+          <label
+            key={dep.id}
+            className="flex items-center gap-2 text-sm cursor-pointer py-1"
+          >
+            <input
+              type="checkbox"
+              checked={checked}
+              onChange={(e) => {
+                setForm((prev) => ({
+                  ...prev,
+                  departmentIds: e.target.checked
+                    ? [...prev.departmentIds, dep.id]
+                    : prev.departmentIds.filter((id) => id !== dep.id),
+                }));
+              }}
+              className="accent-indigo-600"
+            />
+
+            <span>{dep.name}</span>
+          </label>
+        );
+      })}
+
+      {departments.length === 0 && (
+        <p className="text-xs text-gray-500">No departments available</p>
+      )}
+    </div>
+  </div>
+)}
 
         {!editUser && (
           <div className="relative">

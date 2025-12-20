@@ -7,10 +7,11 @@ const useAuthStore = create((set) => ({
   loading: true,
 
   /* ---------------------------------------------------
-     SET AUTH (LOGIN SUCCESS) — UPDATED (NO REFRESH TOKEN)
+     SET AUTH (LOGIN SUCCESS) — FINAL (ACCESS + REFRESH)
   ---------------------------------------------------- */
-  setAuth: (user, accessToken) => {
+  setAuth: (user, accessToken, refreshToken) => {
     if (accessToken) localStorage.setItem("hrms_access", accessToken);
+    if (refreshToken) localStorage.setItem("hrms_refresh", refreshToken);
 
     set({
       user,
@@ -20,13 +21,13 @@ const useAuthStore = create((set) => ({
   },
 
   /* ---------------------------------------------------
-     FINISH INITIAL LOADING (for App.jsx)
+     FINISH INITIAL LOADING
   ---------------------------------------------------- */
   finishLoading: () => set({ loading: false }),
 
   /* ---------------------------------------------------
-     AUTO DECODE USER FROM ACCESS TOKEN
-     (ONLY accessToken stored)
+     AUTO LOAD USER FROM ACCESS TOKEN
+     (supports sub OR id)
   ---------------------------------------------------- */
   loadUserFromToken: () => {
     const token = localStorage.getItem("hrms_access");
@@ -37,7 +38,7 @@ const useAuthStore = create((set) => ({
 
       set({
         user: {
-          id: decoded.id,       // backend uses id (not sub anymore)
+          id: decoded.sub || decoded.id, // ✅ IMPORTANT FIX
           role: decoded.role,
         },
         accessToken: token,
@@ -45,16 +46,18 @@ const useAuthStore = create((set) => ({
       });
     } catch (err) {
       console.error("Token decode failed:", err);
+      localStorage.removeItem("hrms_access");
+      localStorage.removeItem("hrms_refresh");
       set({ loading: false });
     }
   },
 
   /* ---------------------------------------------------
-     LOGOUT — ONLY CLEARS ACCESS TOKEN
-     Refresh token auto-clears (cookie) on backend
+     LOGOUT — CLEAR BOTH TOKENS
   ---------------------------------------------------- */
   logout: () => {
     localStorage.removeItem("hrms_access");
+    localStorage.removeItem("hrms_refresh");
 
     set({
       user: null,
