@@ -61,7 +61,15 @@ const load = async () => {
           {/* Quick Top Info */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4">
             <QuickInfo label="Role" value={emp.role} icon={<FiUser />} />
-            <QuickInfo label="Department" value={emp.department?.name || "Not Assigned"} icon={<FiBriefcase />} />
+            <QuickInfo 
+  label="Department" 
+  value={
+    emp.departments?.length 
+      ? emp.departments.map(d => d.department?.name).join(", ") 
+      : "Not Assigned"
+  }
+  icon={<FiBriefcase />} 
+/>
             <QuickInfo label="Joined" value={new Date(emp.createdAt).toLocaleDateString()} icon={<FiCalendar />} />
             <QuickInfo label="Active" value={emp.isActive ? "Yes" : "No"} icon={<FiUser />} />
           </div>
