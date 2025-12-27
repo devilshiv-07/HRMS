@@ -1,171 +1,302 @@
-// import prisma from "../prismaClient.js";
-// import { sendMail } from "../utils/mail.js"; // smtp mail function (below provided)
+import prisma from "../prismaClient.js";
+import { sendRequestNotificationMail, sendResignationStatusMail } from "../utils/sendMail.js"; // <-- IMPORTANT
+import { getAdminAndManagers } from "../utils/getApprovers.js";
+import { Parser } from "json2csv";
+import ExcelJS from "exceljs";
 
-// /**
-//  * Employee Apply for resignation
-//  * POST /resignation/apply
-//  */
-// export const applyResignation = async (req, res) => {
-//   try {
-//     const userId = req.user.id;
-//     const { lastWorking, reason } = req.body;
+/* =====================================================
+   🔹 HELPERS
+===================================================== */
 
-//     const exist = await prisma.resignation.findFirst({
-//       where: { userId, status: "PENDING" },
-//     });
+const validateOwner = async (id, userId) => {
+  const record = await prisma.resignation.findFirst({ where: { id, userId } });
+  if (!record) throw new Error("Unauthorized access");
+  return record;
+};
 
-//     if (exist) {
-//       return res.status(400).json({
-//         success: false,
-//         message: "You already have a pending resignation request",
-//       });
-//     }
+const validateManagerResignationAccess = async (resignationId, managerId) => {
+  const record = await prisma.resignation.findFirst({
+    where: {
+      id: resignationId,
+      user: { departments: { some: { department: { managers: { some: { id: managerId } } } } } }
+    }
+  });
+  if (!record) throw new Error("No access to this resignation request");
+  return record;
+};
 
-//     const resign = await prisma.resignation.create({
-//       data: {
-//         userId,
-//         lastWorking: new Date(lastWorking),
-//         reason,
-//       },
-//       include: {
-//         user: true,
-//       }
-//     });
+const updateStatus = async ({ id, status, reason = null }) => {
+  return prisma.resignation.update({
+    where: { id },
+    data: { status, rejectReason: status === "REJECTED" ? reason || "" : null },
+    include: { user: true }
+  });
+};
 
-//     // email admins + managers
-//     const admins = await prisma.user.findMany({ where: { role: "ADMIN", isActive:true } });
+/* =====================================================
+   👤 EMPLOYEE — APPLY RESIGNATION
+===================================================== */
 
-//     const managers = await prisma.user.findMany({
-//       where: {
-//         managedDepartments: {
-//           some: {
-//             users: { some: { id: userId } }
-//           }
-//         }
-//       }
-//     });
+export const applyResignation = async (req, res) => {
+  try {
+    const { lastWorking, reasonType, reason, noticePeriod, handoverDetail, declaration } = req.body;
 
-//     const notifyTo = [...admins, ...managers];
+    if (!lastWorking || !declaration)
+      return res.status(400).json({ success: false, message: "Last working & declaration required" });
 
-//     notifyTo.forEach(u => {
-//       sendMail({
-//         to: u.email,
-//         subject: `Resignation Request - ${resign.user.firstName}`,
-//         html: `
-//           <h3>New Resignation Request</h3>
-//           <p><b>Employee:</b> ${resign.user.firstName} ${resign.user.lastName}</p>
-//           <p><b>Last Working Day:</b> ${new Date(lastWorking).toDateString()}</p>
-//           <p><b>Reason:</b> ${reason || "Not Provided"}</p>
-//         `
-//       });
-//     });
+    const resignation = await prisma.resignation.create({
+      data: {
+        userId: req.user.id,
+        lastWorking: new Date(lastWorking),
+        reasonType,
+        reason,
+        noticePeriod: noticePeriod ? Number(noticePeriod) : null,
+        handoverDetail,
+        declaration,
+      }
+    });
 
-//     return res.json({
-//       success: true,
-//       message: "Resignation request submitted",
-//       resignation: resign,
-//     });
+    /* -------- MAIL TO Manager + Admin -------- */
+    try {
+      const approverEmails = await getAdminAndManagers(req.user.id);
 
-//   } catch (err) {
-//     console.log(err);
-//     res.status(500).json({ success: false, message: "Something went wrong" });
-//   }
-// };
+      if (approverEmails.length > 0) {
+        await sendRequestNotificationMail({
+          to: approverEmails,
+          subject: "New Resignation Submitted",
+          title: "Resignation Request",
+          employeeName: `${req.user.firstName} ${req.user.lastName}`,
+          details: [
+            `Last Working: ${new Date(lastWorking).toDateString()}`,
+            reasonType && `Reason Type: ${reasonType}`,
+            reason && `Reason: ${reason}`,
+            noticePeriod && `Notice Period: ${noticePeriod} days`,
+          ].filter(Boolean),
+        });
+      }
+    } catch (err) { console.log("Mail error:", err.message); }
 
+    res.json({ success: true, message: "Resignation submitted", resignation });
 
-// /**
-//  * Approve Request (ADMIN or Manager)
-//  * POST /resignation/:id/approve
-//  */
-// export const approveResignation = async (req, res) => {
-//   try {
-//     const { id } = req.params;
+  } catch (e) {
+    res.status(500).json({ success: false, message: "Server Error" });
+  }
+};
 
-//     const resign = await prisma.resignation.update({
-//       where: { id },
-//       data: { status: "APPROVED" },
-//       include:{ user:true }
-//     });
+/* =====================================================
+   👤 EMPLOYEE — LIST
+===================================================== */
 
-//     // Auto deactivate employee
-//     await prisma.user.update({
-//       where:{ id: resign.userId },
-//       data:{ isActive:false }
-//     });
+export const myResignations = async (req, res) => {
+  try {
+    const list = await prisma.resignation.findMany({
+      where: { userId: req.user.id, isEmployeeDeleted: false },
+      orderBy: { createdAt: "desc" },
+    });
 
-//     // send email to user
-//     sendMail({
-//       to: resign.user.email,
-//       subject:"Resignation Approved",
-//       html:`<p>Your resignation request has been <b>Approved</b>.</p>`
-//     });
+    res.json({ success: true, list });
 
-//     return res.json({
-//       success: true,
-//       message: "Resignation approved & user deactivated",
-//       resignation: resign,
-//     });
+  } catch (e) {
+    res.status(500).json({ success: false, message: "Failed" });
+  }
+};
 
-//   } catch (err) {
-//     console.log(err);
-//     res.status(500).json({ message:"Something went wrong" });
-//   }
-// };
+/* =====================================================
+   👤 EMPLOYEE — SOFT DELETE
+===================================================== */
 
+export const employeeDeleteResignation = async (req, res) => {
+  try {
+    await validateOwner(req.params.id, req.user.id);
 
-// /**
-//  * Reject Resignation
-//  * POST /resignation/:id/reject
-//  */
-// export const rejectResignation = async (req, res) => {
-//   try {
-//     const { id } = req.params;
-//     const { reason } = req.body;
+    await prisma.resignation.update({
+      where: { id: req.params.id },
+      data: { isEmployeeDeleted: true }
+    });
 
-//     const resign = await prisma.resignation.update({
-//       where: { id },
-//       data: { status: "REJECTED", reason },
-//       include:{ user:true }
-//     });
+    res.json({ success: true, message: "Removed successfully" });
 
-//     sendMail({
-//       to: resign.user.email,
-//       subject:"Resignation Rejected",
-//       html:`<p>Your resignation request was <b>Rejected</b>.<br/>Reason: ${reason}</p>`
-//     });
+  } catch (e) {
+    res.status(403).json({ success: false, message: e.message });
+  }
+};
 
-//     return res.json({
-//       success: true,
-//       message: "Resignation rejected",
-//       resignation: resign,
-//     });
+/* =====================================================
+   👑 MANAGER — VIEW DEPARTMENT REQUESTS
+===================================================== */
 
-//   } catch (err) {
-//     console.log(err);
-//     res.status(500).json({ message:"Something went wrong" });
-//   }
-// };
+export const getManagerResignations = async (req, res) => {
+  try {
+    const list = await prisma.resignation.findMany({
+      where: {
+        user: {
+          departments: { some: { department: { managers: { some: { id: req.user.id } } } } }
+        }
+      },
+      include: { user: { select: { id: true, firstName: true, lastName: true, email: true, position: true } }},
+      orderBy: { createdAt: "desc" }
+    });
 
+    res.json({ success: true, list });
 
-// /**
-//  * List Requests
-//  * GET /resignation/list
-//  * Admin/Manager only
-//  */
-// export const listResignations = async (req, res) => {
-//   try {
-//     const data = await prisma.resignation.findMany({
-//       orderBy:{ createdAt:"desc" },
-//       include:{
-//         user:{
-//           select:{ firstName:true,lastName:true,email:true,role:true }
-//         }
-//       }
-//     });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
 
-//     res.json({ success:true, resignations:data });
-//   } catch(err){
-//     console.log(err)
-//     res.status(500).json({ message:"Error fetching data" });
-//   }
-// };
+/* =====================================================
+   👑 ADMIN — ALL LIST
+===================================================== */
+
+export const getAllResignations = async (req, res) => {
+  try {
+    if (req.user.role !== "ADMIN")
+      return res.status(403).json({ success: false, message: "Admin only" });
+
+    const list = await prisma.resignation.findMany({
+      where: { isAdminDeleted: false },
+      include: { user: true },
+      orderBy: { createdAt: "desc" }
+    });
+
+    res.json({ success: true, list });
+
+  } catch (e) {
+    res.status(500).json({ success: false, message: "Failed" });
+  }
+};
+
+/* =====================================================
+   APPROVE / REJECT
+===================================================== */
+
+export const updateResignationStatus = async (req, res) => {
+  try {
+    const { status, reason } = req.body;
+    const id = req.params.id;
+
+    if (!["APPROVED","REJECTED"].includes(status))
+      return res.status(400).json({ success: false, message: "Invalid status" });
+
+    const record = await prisma.resignation.findUnique({ where: { id }, select: { userId:true }});
+    if (!record) return res.status(404).json({ success:false,message:"Not found" });
+
+    if (record.userId === req.user.id)
+      return res.status(403).json({ success:false,message:"Self approval not allowed" });
+
+    if (req.user.role !== "ADMIN")
+      await validateManagerResignationAccess(id, req.user.id);
+
+    const resignation = await updateStatus({ id, status, reason });
+
+    /* ------ MAIL TO EMPLOYEE ON STATUS CHANGE ------ */
+    try {
+      await sendResignationStatusMail({
+        to: resignation.user.email,
+        employeeName: `${resignation.user.firstName} ${resignation.user.lastName}`,
+        status,
+        reason
+      });
+    } catch(err) { console.log("Mail Fail:", err.message) }
+
+    res.json({ success:true,message:`Resignation ${status}`,resignation });
+
+  } catch (e) {
+    res.status(403).json({ success:false,message:e.message });
+  }
+};
+
+/* =====================================================
+   👑 ADMIN — SOFT DELETE
+===================================================== */
+
+export const adminDeleteResignation = async (req, res) => {
+  try {
+    if (req.user.role !== "ADMIN")
+      return res.status(403).json({ success:false,message:"Admin only" });
+
+    await prisma.resignation.update({
+      where:{id:req.params.id},
+      data:{isAdminDeleted:true}
+    });
+
+    res.json({success:true,message:"Removed successfully"});
+
+  } catch(e){
+    res.status(500).json({success:false,message:"Failed"});
+  }
+};
+
+/* =====================================================
+   EXPORT CSV/EXCEL
+===================================================== */
+
+export const exportResignations = async (req,res)=>{
+  try{
+    const user=req.user;
+    let {start,end,userId,departmentId,format}=req.query;
+    if(!format) format="csv";
+
+    const where={isAdminDeleted:false};
+
+    if(user.role!=="ADMIN") where.userId=user.id;
+    else if(userId) where.userId=userId;
+
+    if(start&&end) where.createdAt={gte:new Date(start),lte:new Date(end)};
+    if(departmentId) where.user={departments:{some:{departmentId}}};
+
+    const rows=await prisma.resignation.findMany({
+      where,include:{user:true},orderBy:{createdAt:"desc"}
+    });
+
+    // CSV
+    if(format==="csv"){
+      const parser=new Parser({fields:["employee","lastWorking","reasonType","reason","noticePeriod","status","createdAt"]});
+      const csv=parser.parse(rows.map(r=>({
+        employee:`${r.user.firstName} ${r.user.lastName}`,
+        lastWorking:r.lastWorking.toISOString().split("T")[0],
+        reasonType:r.reasonType,
+        reason:r.reason||"",
+        noticePeriod:r.noticePeriod||"",
+        status:r.status,
+        createdAt:r.createdAt.toISOString().split("T")[0]
+      })));
+      res.header("Content-Type","text/csv");
+      res.attachment("resignations.csv");
+      return res.send(csv);
+    }
+
+    // Excel
+    const workbook=new ExcelJS.Workbook();
+    const sheet=workbook.addWorksheet("Resignations");
+    sheet.columns=[
+      {header:"Employee",key:"employee",width:25},
+      {header:"Last Working",key:"lw",width:15},
+      {header:"Reason Type",key:"rtype",width:20},
+      {header:"Reason",key:"reason",width:35},
+      {header:"Notice",key:"np",width:12},
+      {header:"Status",key:"status",width:15},
+      {header:"Date",key:"date",width:15}
+    ];
+
+    rows.forEach(r=>{
+      sheet.addRow({
+        employee:`${r.user.firstName} ${r.user.lastName}`,
+        lw:r.lastWorking.toISOString().split("T")[0],
+        rtype:r.reasonType,
+        reason:r.reason||"-",
+        np:r.noticePeriod||"-",
+        status:r.status,
+        date:r.createdAt.toISOString().split("T")[0]
+      });
+    });
+
+    res.setHeader("Content-Type","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition","attachment; filename=resignations.xlsx");
+    await workbook.xlsx.write(res);
+    res.end();
+
+  }catch(err){
+    res.status(500).json({success:false,message:"Export failed"});
+  }
+};

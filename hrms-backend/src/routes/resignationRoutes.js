@@ -1,49 +1,75 @@
-// import express from "express";
-// import {
-//   applyResignation,
-//   approveResignation,
-//   rejectResignation,
-//   listResignations,
-// } from "../controllers/resignationController.js";
+import express from "express";
+import {
+  applyResignation,
+  myResignations,
+  getManagerResignations,
+  getAllResignations,
+  updateResignationStatus,
+  employeeDeleteResignation,
+  adminDeleteResignation,
+  exportResignations
+} from "../controllers/resignationController.js";
 
-// import { requireAuth } from "../middlewares/auth.js"; // same as userRoutes
+import { requireAuth } from "../middlewares/auth.js";
 
-// const router = express.Router();
+const router = express.Router();
 
-// /* -----------------------------------------------------------
-//    APPLY RESIGNATION (EMPLOYEE)
-// ------------------------------------------------------------ */
-// router.post(
-//   "/apply",
-//   requireAuth(["ADMIN", "AGILITY_EMPLOYEE", "LYF_EMPLOYEE"]),
-//   applyResignation
-// );
+/* ================= EMPLOYEE APPLY ================= */
+router.post(
+  "/apply",
+  requireAuth(["AGILITY_EMPLOYEE","LYF_EMPLOYEE","ADMIN"]),
+  applyResignation
+);
 
-// /* -----------------------------------------------------------
-//    LIST ALL REQUESTS (ADMIN + MANAGER)
-// ------------------------------------------------------------ */
-// router.get(
-//   "/list",
-//   requireAuth(["ADMIN", "AGILITY_EMPLOYEE", "LYF_EMPLOYEE"]),
-//   listResignations
-// );
+/* ================= EMPLOYEE MY LIST ================= */
+router.get(
+  "/my",
+  requireAuth(["AGILITY_EMPLOYEE","LYF_EMPLOYEE","ADMIN"]),
+  myResignations
+);
 
-// /* -----------------------------------------------------------
-//    APPROVE RESIGNATION (ADMIN / MANAGER)
-// ------------------------------------------------------------ */
-// router.post(
-//   "/:id/approve",
-//   requireAuth(["ADMIN", "AGILITY_EMPLOYEE", "LYF_EMPLOYEE"]),
-//   approveResignation
-// );
+/* ================= MANAGER VIEW DEPARTMENT RESIGNATIONS ================= */
+router.get(
+  "/manager",
+  requireAuth(["ADMIN","AGILITY_EMPLOYEE","LYF_EMPLOYEE"]),
+  getManagerResignations
+);
 
-// /* -----------------------------------------------------------
-//    REJECT RESIGNATION (ADMIN / MANAGER)
-// ------------------------------------------------------------ */
-// router.post(
-//   "/:id/reject",
-//   requireAuth(["ADMIN", "AGILITY_EMPLOYEE", "LYF_EMPLOYEE"]),
-//   rejectResignation
-// );
+/* ================= ADMIN ALL ================= */
+router.get(
+  "/admin",
+  requireAuth(["ADMIN"]),
+  getAllResignations
+);
 
-// export default router;
+/* ================= APPROVE / REJECT ================= 
+   send body => { status:"APPROVED" }  or  { status:"REJECTED", reason:"..." }
+====================================================== */
+router.put(
+  "/status/:id",
+  requireAuth(["ADMIN","AGILITY_EMPLOYEE"]),  // Manager via dept access, Admin full
+  updateResignationStatus
+);
+
+/* ================= EMPLOYEE DELETE OWN ================= */
+router.delete(
+  "/me/:id",
+  requireAuth(["AGILITY_EMPLOYEE","LYF_EMPLOYEE","ADMIN"]),
+  employeeDeleteResignation
+);
+
+/* ================= ADMIN DELETE ANY ================= */
+router.delete(
+  "/admin/:id",
+  requireAuth(["ADMIN"]),
+  adminDeleteResignation
+);
+
+/* ================= EXPORT CSV/EXCEL ================= */
+router.get(
+  "/export",
+  requireAuth(["ADMIN"]),
+  exportResignations
+);
+
+export default router;

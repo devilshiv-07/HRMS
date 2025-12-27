@@ -17,7 +17,7 @@ import userRoutes from "./routes/userRoutes.js";
 import notificationRoutes from "./routes/notificationRoutes.js";
 import reimbursementRoutes from "./routes/reimbursementRoutes.js";
 import managerRoutes from "./routes/managerRoutes.js";
-// import resignationRoutes from "./routes/resignationRoutes.js";
+import resignationRoutes from "./routes/resignationRoutes.js";
 
 
 const app = express();
@@ -89,7 +89,7 @@ app.use("/api/users", userRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/reimbursement", reimbursementRoutes);
 app.use("/api/manager", managerRoutes);
-// app.use("/api/resignation", resignationRoutes);
+app.use("/api/resignation", resignationRoutes);
 
 /* ============================================================
    HEALTH CHECK
