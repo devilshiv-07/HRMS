@@ -58,13 +58,12 @@ export const managerLeaves = async (req, res) => {
         },
       },
       include: {
-        user: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-          },
-        },
+        user: { select: { id:true, firstName:true,lastName:true } },
+        approvals: {
+          include: {
+            manager: { select: { firstName:true,lastName:true,email:true } }
+          }
+        }
       },
       orderBy: { createdAt: "desc" },
     });
@@ -105,6 +104,9 @@ export const managerReimbursements = async (req, res) => {
           },
         },
         bills: true,
+        approvals: {
+          include: { manager:{select:{firstName:true,lastName:true,email:true}} }
+        }
       },
       orderBy: { createdAt: "desc" },
     });

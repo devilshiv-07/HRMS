@@ -33,10 +33,47 @@ model User {
   department         Department?      @relation("DepartmentUsers", fields: [departmentId], references: [id])
   managedDepartments Department[]     @relation("DepartmentManagers")
 
+  leaveApprovals         LeaveApproval[]
+  reimbursementApprovals ReimbursementApproval[]
+
   // 🔥 Resignation relation added
-  resignations       Resignation[]
+  resignations Resignation[]
+
+  /// 🔥 CompOff balance and relation
+  compOffBalance Float       @default(0) // supports 0.5 half-day
+  compOffs       CompOff[]
+  weeklyOffs     WeeklyOff[]
 
   @@map("users")
+}
+
+/// *
+///  * ===================== WEEKLY/OFF (Roster + Weekly Supported)
+model WeeklyOff {
+  id        String    @id @default(uuid())
+  userId    String
+  offDay    String? // "Monday" (Weekly Off)
+  offDate   DateTime? // One time Date Off
+  isFixed   Boolean   @default(true) // true=Weekly repeated, false=Roster/one-time
+  user      User      @relation(fields: [userId], references: [id])
+  createdAt DateTime  @default(now())
+}
+
+/// *
+///  * ===================== COMP-OFF MODEL =====================
+model CompOff {
+  id         String    @id @default(uuid())
+  userId     String
+  workDate   DateTime
+  duration   Float     @default(1) // 1 = full, 0.5 = half ⭐
+  status     String    @default("PENDING") // APPROVED, REJECTED
+  approvedAt DateTime?
+  expiryDate DateTime?
+  note       String?
+
+  user      User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 /// *
@@ -101,6 +138,8 @@ model Leave {
   approver     User?     @relation("LeaveApprover", fields: [approverId], references: [id])
   user         User      @relation(fields: [userId], references: [id])
 
+  approvals LeaveApproval[]
+
   @@index([userId, startDate, endDate])
   @@map("leaves")
 }
@@ -139,6 +178,8 @@ model Reimbursement {
   rejectReason      String?
   bills             Bill[]
   user              User                @relation(fields: [userId], references: [id])
+
+  approvals ReimbursementApproval[]
 }
 
 /// *
@@ -186,17 +227,17 @@ model RefreshToken {
 /// 🔥 UPDATED RESIGNATION
 ///////////////////////////
 model Resignation {
-  id                String       @id @default(uuid())
-  userId            String
-  user              User         @relation(fields: [userId], references: [id])
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
 
   // Form fields
-  lastWorking       DateTime
-  reasonType        String       @default("Other") 
-  reason            String?      // Optional text
-  noticePeriod      Int?
-  handoverDetail    String?
-  declaration       Boolean      @default(false)
+  lastWorking    DateTime
+  reasonType     String   @default("Other")
+  reason         String? // Optional text
+  noticePeriod   Int?
+  handoverDetail String?
+  declaration    Boolean  @default(false)
 
   // Admin side
   status            ResignStatus @default(PENDING)
@@ -204,8 +245,36 @@ model Resignation {
   isEmployeeDeleted Boolean      @default(false)
   isAdminDeleted    Boolean      @default(false)
 
-  createdAt         DateTime     @default(now())
-  updatedAt         DateTime     @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model LeaveApproval {
+  id        String              @id @default(uuid())
+  leaveId   String
+  managerId String
+  status    LeaveApprovalStatus @default(PENDING)
+  reason    String?
+  actedAt   DateTime?
+
+  leave   Leave @relation(fields: [leaveId], references: [id])
+  manager User  @relation(fields: [managerId], references: [id])
+
+  @@unique([leaveId, managerId]) // 1 manager = 1 decision per leave
+}
+
+model ReimbursementApproval {
+  id              String                      @id @default(uuid())
+  reimbursementId String
+  managerId       String
+  status          ReimbursementApprovalStatus @default(PENDING)
+  reason          String?
+  actedAt         DateTime?
+
+  reimbursement Reimbursement @relation(fields: [reimbursementId], references: [id])
+  manager       User          @relation(fields: [managerId], references: [id])
+
+  @@unique([reimbursementId, managerId])
 }
 
 /// *
@@ -223,6 +292,7 @@ enum LeaveType {
   CASUAL
   WFH
   HALF_DAY
+  COMP_OFF
 }
 
 enum ReimbursementStatus {
@@ -231,9 +301,18 @@ enum ReimbursementStatus {
   REJECTED
 }
 
-///////////////////////////
-/// 🔥 NEW ENUM
-///////////////////////////
+enum LeaveApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum ReimbursementApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 enum ResignStatus {
   PENDING
   APPROVED

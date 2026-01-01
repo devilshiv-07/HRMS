@@ -27,108 +27,95 @@ export const createLeave = async (req, res) => {
     if (!type || !startDate || !endDate) {
       return res.status(400).json({ success: false, message: "Missing fields" });
     }
-
-    // 🔥 HALF DAY VALIDATION
+    // ⛔ COMP OFF but balance is zero
+    if (type === "COMP_OFF") {
+     const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+     if (!user || user.compOffBalance <= 0) {
+       return res.status(400).json({
+         success: false,
+         message: "Insufficient Comp-Off balance"
+       });
+     }
+    }
     if (isHalfDay(type) && startDate !== endDate) {
-      return res.status(400).json({
-        success: false,
-        message: "Half Day must be for a single date",
-      });
+      return res.status(400).json({ success: false, message: "Half Day must be for a single date" });
     }
 
     const requestStart = new Date(startDate);
     const requestEnd = new Date(endDate);
 
-    // ⭐ CHECK OVERLAPPING APPROVED LEAVES
-const overlappingLeaves = await prisma.leave.findMany({
-  where: {
-    userId: req.user.id,
-    status: { in: ["PENDING", "APPROVED"] },
-    AND: [
-      { startDate: { lte: requestEnd } },
-      { endDate: { gte: requestStart } },
-    ],
-  },
-});
-
-if (overlappingLeaves.length > 0) {
-  return res.status(400).json({
-    success: false,
-    message:
-      type === "WFH"
-        ? "WFH already exists or clashes with another leave"
-        : "Leave already exists for this date range",
-  });
-}
-
-    /* ================= 🔥 FIXED PART ================= */
-    const employee = await prisma.user.findUnique({
-      where: { id: req.user.id },
-      include: {
-        departments: {
-          include: {
-            department: {
-              include: {
-                managers: true,
-              },
-            },
-          },
-        },
-      },
-    });
-
-    // First department manager → approver
-    const approverId =
-      employee.departments
-        .flatMap((d) => d.department.managers)
-        .map((m) => m.id)[0] || null;
-    /* ================================================= */
-
-    const leave = await prisma.leave.create({
-      data: {
+    // Prevent overlapping leave
+    const overlappingLeaves = await prisma.leave.findMany({
+      where: {
         userId: req.user.id,
-        type,
-        startDate: requestStart,
-        endDate: requestEnd,
-        reason: reason || "",
-        status: "PENDING",
-        approverId,
-      },
-      include: {
-        user: true,
-        approver: true,
-      },
+        status: { in: ["PENDING", "APPROVED"] },
+        AND: [{ startDate:{lte:requestEnd} },{ endDate:{gte:requestStart} }]
+      }
     });
-/* ================= 📧 MAIL TO ADMIN + MANAGER ================= */
-try {
-  const approverEmails = await getAdminAndManagers(req.user.id);
 
-  if (approverEmails.length > 0) {
-    await sendRequestNotificationMail({
-      to: approverEmails,
-      subject: "New Leave Request Submitted",
-      title: "Leave / WFH / Half-Day Request",
-      employeeName: `${leave.user.firstName} ${leave.user.lastName}`,
-      details: [
-        `Type: ${getLeaveTypeName(type)}`,
-        `From: ${startDate}`,
-        `To: ${endDate}`,
-        reason && `Reason: ${reason}`,
-      ].filter(Boolean),
+    if (overlappingLeaves.length > 0) {
+      return res.status(400).json({
+        success:false,
+        message:type==="WFH"?"WFH clash":"Leave already exists for this duration"
+      });
+    }
+
+    /* Get all managers */
+    const employee = await prisma.user.findUnique({
+      where:{ id:req.user.id },
+      include:{
+        departments:{ include:{ department:{ include:{ managers:true }}}}
+      }
     });
-  }
-} catch (mailErr) {
-  console.error("Leave notification mail failed:", mailErr.message);
-}
+
+    const managers = employee.departments.flatMap(d=>d.department.managers);
+    if(managers.length===0)
+      return res.status(400).json({ success:false,message:"No manager assigned" });
+
+    /* Create leave */
+    const leave = await prisma.leave.create({
+      data:{
+        userId:req.user.id,
+        type,
+        startDate:requestStart,
+        endDate:requestEnd,
+        reason: reason||"",
+        status:"PENDING"
+      },
+      include:{ user:true }   // <-- IMPORTANT FIX (mail needs name)
+    });
+
+    /* Create approvals */
+    await prisma.leaveApproval.createMany({
+      data: managers.map(m=>({ leaveId:leave.id, managerId:m.id, status:"PENDING" })),
+      skipDuplicates:true              // <-- Avoid P2002 crash
+    });
+
+    /* Send mail */
+    try{
+      await sendRequestNotificationMail({
+        to: managers.map(m=>m.email),
+        subject:"New Leave Request Submitted",
+        title:"Leave / WFH / Half-Day Request",
+        employeeName:`${leave.user.firstName} ${leave.user.lastName||""}`,
+        details:[
+          `Type: ${getLeaveTypeName(type)}`,
+          `From: ${startDate}`,
+          `To: ${endDate}`,
+          reason && `Reason: ${reason}`
+        ].filter(Boolean)
+      });
+    }catch(e){ console.log("Mail fail:",e.message); }
 
     return res.json({
-      success: true,
-      message: `Your ${getLeaveTypeName(type)} request has been submitted successfully`,
-      leave,
+      success:true,
+      message:`Your ${getLeaveTypeName(type)} request submitted successfully`,
+      leaveId:leave.id
     });
+
   } catch (error) {
-    console.error("createLeave ERROR:", error);
-    return res.status(500).json({ success: false, message: "Internal server error" });
+    console.error("createLeave ERROR:",error);
+    return res.status(500).json({success:false,message:"Internal server error"});
   }
 };
 
@@ -290,146 +277,143 @@ export const updateLeave = async (req, res) => {
 -------------------------------------------------------- */
 export const approveLeave = async (req, res) => {
   try {
-    const id = req.params.id;
-    const { action, reason } = req.body;
+    const leaveId = req.params.id;
+    let { action, reason } = req.body;
+    const managerId = req.user.id;
 
     if (!["APPROVED", "REJECTED"].includes(action)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid action",
-      });
+      return res.status(400).json({ success: false, message: "Invalid action" });
     }
 
     const leave = await prisma.leave.findUnique({
-      where: { id },
+      where: { id: leaveId },
       include: {
         user: {
           include: {
             departments: {
               include: {
-                department: {
-                  include: {
-                    managers: true,
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
+                department: { include: { managers: true } }
+              }
+            }
+          }
+        }
+      }
     });
 
-    if (!leave) {
-      return res.status(404).json({
-        success: false,
-        message: "Leave not found",
-      });
-    }
-    // ❌ BLOCK SELF APPROVAL (MOST IMPORTANT)
-   if (leave.userId === req.user.id) {
-    return res.status(403).json({
-     success: false,
-     message: "You cannot approve or reject your own leave",
-     });
-   }
+    if (!leave) return res.status(404).json({ success: false, message: "Leave not found" });
 
-    /* =====================================================
-       🔐 PERMISSION CHECK
-       - ADMIN → always allowed
-       - MANAGER → only if employee is in manager's department
-    ===================================================== */
+    // ❌ Self approval block
+    if (leave.userId === managerId)
+      return res.status(403).json({ success:false, message:"You cannot approve your own leave" });
 
+    // 🔐 Permission check
     let allowed = false;
+    if (req.user.role === "ADMIN") allowed = true;
+    else {
+      const managerIds = leave.user.departments.flatMap(d=>d.department.managers).map(m=>m.id);
+      if (managerIds.includes(managerId)) allowed = true;
+    }
 
+    if (!allowed) return res.status(403).json({ success:false, message:"Not allowed" });
+
+    // =====================================================
+    // 🔥 Manager decision update in leaveApproval table
+    // =====================================================
     if (req.user.role === "ADMIN") {
-      allowed = true;
-    } else {
-      // 🔥 relation-based manager check
-      const managerIds = leave.user.departments
-        .flatMap((d) => d.department.managers)
-        .map((m) => m.id);
-
-      if (managerIds.includes(req.user.id)) {
-        allowed = true;
-      }
-    }
-
-    if (!allowed) {
-      return res.status(403).json({
-        success: false,
-        message: "You are not allowed to approve this leave",
-      });
-    }
-
-    /* =====================================================
-       ⭐ OVERLAP CHECK (ONLY WHEN APPROVING)
-    ===================================================== */
-    if (action === "APPROVED") {
-      const overlappingLeaves = await prisma.leave.findMany({
-        where: {
-          userId: leave.userId,
-          status: "APPROVED",
-          id: { not: id },
-          AND: [
-            { startDate: { lte: leave.endDate } },
-            { endDate: { gte: leave.startDate } },
-          ],
-        },
-      });
-
-      if (overlappingLeaves.length > 0) {
-        return res.status(400).json({
-          success: false,
-          message: "Employee already has an approved leave in this date range",
-        });
-      }
-    }
-
-    /* =====================================================
-       ✅ UPDATE STATUS
-    ===================================================== */
-    const updated = await prisma.leave.update({
-      where: { id },
-      data: {
-        status: action,
-        approverId: req.user.id,
-        rejectReason: action === "REJECTED" ? reason || "" : null,
-      },
-      include: {
-        user: true,
-        approver: true,
-      },
-    });
-/* ================= 📧 MAIL TO EMPLOYEE (APPROVE / REJECT) ================= */
-try {
-  await sendRequestNotificationMail({
-    to: [updated.user.email], // 👈 jisne request bheji
-    subject: `Leave Request ${action}`,
-    title: "Leave Status Update",
-    employeeName: `${updated.user.firstName} ${updated.user.lastName}`,
-    details: [
-      `Type: ${getLeaveTypeName(updated.type)}`,
-      `From: ${updated.startDate.toDateString()}`,
-      `To: ${updated.endDate.toDateString()}`,
-      `Status: ${action}`,
-      action === "REJECTED" && `Reason: ${reason || "Not specified"}`,
-    ].filter(Boolean),
+  // Admin direct approval entry create/update
+  await prisma.leaveApproval.upsert({
+    where:{ leaveId_managerId:{ leaveId, managerId } },
+    update:{ status:action, reason, actedAt:new Date() },
+    create:{ leaveId, managerId, status:action, reason }
   });
-} catch (mailErr) {
-  console.error("Leave approve/reject mail failed:", mailErr.message);
-}
+} 
+else {
+    const approval = await prisma.leaveApproval.updateMany({
+      where:{ leaveId, managerId },
+      data:{ status:action, reason, actedAt:new Date() }
+    });
+
+    if (approval.count===0)
+      return res.status(403).json({ success:false, message:"You are not approver for this leave" });
+  }
+
+    // =====================================================
+    // 🔥 Now evaluate group decision
+    // =====================================================
+    const approvals = await prisma.leaveApproval.findMany({ where:{ leaveId } });
+
+    const allApproved = approvals.every(a=>a.status==="APPROVED") || req.user.role==="ADMIN";
+    const anyRejected = approvals.some(a=>a.status==="REJECTED");
+
+    let finalStatus = "PENDING";
+
+
+    if (anyRejected) {
+      finalStatus = "REJECTED";
+      // ⭐ Admin approved → final APPROVED directly
+
+    } else if (req.user.role === "ADMIN" && action === "APPROVED") {
+      finalStatus = "APPROVED";
+      
+     } else if (allApproved) {
+      // ⭐ Overlap check only at final approval
+      const overlapping = await prisma.leave.findMany({
+        where:{
+          userId: leave.userId,
+          status:"APPROVED",
+          id:{not:leaveId},
+          AND:[
+            {startDate:{lte:leave.endDate}},
+            {endDate:{gte:leave.startDate}}
+          ]
+        }
+      });
+
+     if (overlapping.length>0){
+  finalStatus="REJECTED";
+  reason = reason || "Overlapping leave already approved";
+} else finalStatus="APPROVED";
+    }
+    // =====================================================
+    // Update final leave status in main table
+    // =====================================================
+    const updated = await prisma.leave.update({
+      where:{id:leaveId},
+      data:{ 
+        status:finalStatus,
+        rejectReason: finalStatus==="REJECTED" ? reason||"" : null
+      },
+      include:{ user:true }
+    });
+
+    // =====================================================
+    // 📩 Email Notification
+    // =====================================================
+    try {
+      await sendRequestNotificationMail({
+        to:[updated.user.email],
+        subject:`Leave Request ${finalStatus}`,
+        title:"Leave Status Update",
+        employeeName:`${updated.user.firstName} ${updated.user.lastName}`,
+        details:[
+          `Type: ${getLeaveTypeName(updated.type)}`,
+          `From: ${updated.startDate.toDateString()}`,
+          `To: ${updated.endDate.toDateString()}`,
+          `Status: ${finalStatus}`,
+          finalStatus==="REJECTED" && `Reason: ${reason||"Not specified"}`
+        ].filter(Boolean)
+      });
+    } catch(e){ console.log("Mail fail:",e.message); }
 
     return res.json({
-      success: true,
-      message: `Leave ${action.toLowerCase()} successfully`,
-      leave: updated,
+      success:true,
+      message:`Leave ${finalStatus}`,
+      leave:updated
     });
+
   } catch (error) {
     console.error("approveLeave ERROR:", error);
-    return res.status(500).json({
-      success: false,
-      message: "Internal server error",
-    });
+    return res.status(500).json({ success:false, message:"Internal server error" });
   }
 };
 

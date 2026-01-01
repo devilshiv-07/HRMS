@@ -101,6 +101,10 @@ const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 export default function AttendanceEmployee() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [weekOff,setWeekOff] = useState(null);
+  const [checkInSuccess, setCheckInSuccess] = useState(false);
+  const [checkOutSuccess, setCheckOutSuccess] = useState(false);
+
 
   /* FULL YEAR CACHED DATA */
   const [fullData, setFullData] = useState({
@@ -185,6 +189,13 @@ export default function AttendanceEmployee() {
       return () => clearTimeout(t);
     }
   }, [error]);
+  useEffect(()=>{
+  const loadWeekOff = async ()=>{
+      const r = await api.get("/weekly-off/me");
+      setWeekOff(r.data.weekOff);
+  }
+  loadWeekOff();
+  },[]);
 
   /* ------------------ 2. APPLY FILTERS ------------------ */
 const loadAttendance = useCallback(
@@ -231,15 +242,19 @@ if (todayLog?.status === "PRESENT") newCal[todayIso] = "PRESENT";
   }, [filters, fullData, loadAttendance]);
 
   /* CHECK-IN */
-  const checkIn = async () => {
-    try {
-      await api.post("/attendance/checkin");
-      await loadFullYear();
-      loadAttendance(filters);
-    } catch {
-      setError("Check-in failed");
-    }
-  };
+const checkIn = async () => {
+  try {
+    await api.post("/attendance/checkin");
+    await loadFullYear();
+    loadAttendance(filters);
+
+   setCheckInSuccess(true);
+   setTimeout(() => setCheckInSuccess(false), 1000);   // 1 sec बाद hide
+
+  } catch {
+    setError("Check-in failed");
+  }
+};
 
   /* CHECK-OUT */
   const checkOut = async () => {
@@ -247,6 +262,10 @@ if (todayLog?.status === "PRESENT") newCal[todayIso] = "PRESENT";
       await api.post("/attendance/checkout");
       await loadFullYear();
       loadAttendance(filters);
+
+      setCheckOutSuccess(true);
+      setTimeout(() => setCheckOutSuccess(false), 1000);
+
     } catch {
       setError("Check-out failed");
     }
@@ -282,9 +301,17 @@ if (todayLog?.status === "PRESENT") newCal[todayIso] = "PRESENT";
   const calendarDays = useMemo(() => {
     return iterateDatesInclusive(filters.start, filters.end).map((d) => {
       const iso = toISODate(d);
-      return { iso, day: d.getDate(), status: calendar[iso] || "ABSENT" };
+      
+   // check this date is weekoff ?
+  const isWeekOff = weekOff && (
+     (weekOff.isFixed && weekOff.offDay === d.toLocaleDateString('en-US',{weekday:'long'})) ||
+     (!weekOff.isFixed && weekOff.offDate === iso)
+   );
+      return { iso, day: d.getDate(), status: calendar[iso] || "ABSENT" ,
+      isWeekOff
+      };
     });
-  }, [filters, calendar]);
+  }, [filters, calendar, weekOff]);
 
   /* MONTH MATRIX FOR YEAR */
   const yearMonths = useMemo(() => {
@@ -413,6 +440,21 @@ return (
           </div>
         </div>
 
+      {/* Assigned WeekOff */}
+{/* Assigned WeekOff */}
+<div className="p-5 rounded-2xl shadow-xl bg-white dark:bg-gray-900 border dark:border-[#2a2c33]">
+  <div className="text-xl font-bold text-yellow-600 dark:text-yellow-400">
+    {weekOff 
+      ? weekOff.isFixed 
+        ? weekOff.offDay               // Weekly fixed off like "Saturday"
+        : `${weekOff.offDate}`         // Specific dates off
+      : "Not Assigned"}
+  </div>
+  <div className="text-sm text-gray-600 dark:text-gray-300">
+    Assigned WeekOff
+  </div>
+</div>
+
       </div>
 
       {/* QUICK ACTIONS */}
@@ -423,19 +465,20 @@ return (
         </h2>
 
         <div className="flex flex-col sm:flex-row gap-3">
-          <button
-            onClick={checkIn}
-            className="flex-1 px-6 py-3 bg-green-600 hover:bg-green-700 text-white rounded-xl font-semibold shadow"
-          >
-            Check-in
-          </button>
+<button
+  onClick={checkIn}
+  className="flex-1 px-6 py-3 bg-green-600 hover:bg-green-700 text-white rounded-xl font-semibold shadow flex items-center justify-center gap-2"
+>
+ {checkInSuccess ? "✔" : "Check-in"}
+</button>
 
-          <button
-            onClick={checkOut}
-            className="flex-1 px-6 py-3 bg-red-600 hover:bg-red-700 text-white rounded-xl font-semibold shadow"
-          >
-            Check-out
-          </button>
+<button
+  onClick={checkOut}
+  className="flex-1 px-6 py-3 bg-red-600 hover:bg-red-700 text-white rounded-xl font-semibold shadow flex items-center justify-center gap-2"
+>
+ {checkOutSuccess ? "✔" : "Check-out"}
+</button>
+
         </div>
       </div>
 
@@ -521,8 +564,9 @@ return (
                   key={d.iso}
                   className={`p-3 sm:p-4 rounded-xl text-center shadow border 
                   dark:border-[#2a2c33] dark:bg-gray-800 transition 
-                  ${
-                    d.status === "PRESENT"
+                  ${d.isWeekOff 
+                  ? "bg-yellow-300 text-yellow-900 dark:bg-yellow-600 dark:text-black font-bold"       
+                    : d.status === "PRESENT"
                       ? "bg-green-100 text-green-700 dark:bg-green-800 dark:text-green-200"
                     : d.status === "WFH"
                       ? "bg-blue-100 text-blue-700 dark:bg-blue-800 dark:text-blue-200"

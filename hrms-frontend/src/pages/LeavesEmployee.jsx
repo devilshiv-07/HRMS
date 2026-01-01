@@ -121,6 +121,7 @@ export default function Leaves() {
         l.status === "APPROVED" &&
         l.type !== "WFH" &&
         l.type !== "UNPAID" &&
+        l.type !== "COMP_OFF" &&
         new Date(l.startDate) >= new Date(yearStart) &&
         new Date(l.endDate) <= new Date(yearEnd)
     )
@@ -219,6 +220,13 @@ export default function Leaves() {
   }, []);
 
 const apply = async () => {
+  
+   if (form.type === "COMP_OFF" && (user?.compOffBalance ?? 0) <= 0) {
+   setMsg("You don't have Comp-Off balance");
+   setMsgType("error");
+   setApplyMessage("Not enough Comp-Off balance");
+   return;
+  }
   setApplyLoading(true);  // ⬅ button text Applying...
   try {
     await api.post("/leaves", {
@@ -258,6 +266,14 @@ const apply = async () => {
   const submitTodayLeave = async () => {
     setTodayLoading(true);  
     const today = new Date().toISOString().slice(0, 10);
+    // ⭐ Block if comp-off balance is zero
+    if (todayForm.type === "COMP_OFF" && (user?.compOffBalance ?? 0) <= 0) {
+       setMsg("You don't have Comp-Off balance");
+       setMsgType("error");
+       setTodayApplyMessage("Not enough Comp-Off balance");
+       setTodayLoading(false); 
+       return;
+    }
 
     try {
       await api.post("/leaves", {
@@ -359,6 +375,11 @@ const apply = async () => {
             value={approvedHalfDay}
           />
           <StatCard
+          icon={<FiClock className="text-teal-500" />}
+          title="Comp-Off Balance"
+          value={user?.compOffBalance ?? 0}
+          />
+          <StatCard
             icon={<FiCalendar className="text-red-500" />}
             title="Remaining Leaves"
             value={`${remainingLeaves} / ${TOTAL_YEARLY_LEAVES}`}
@@ -385,10 +406,11 @@ const apply = async () => {
                 value={form.type}
                 onChange={(e) => setForm({ ...form, type: e.target.value })}
               >
+                <option value="CASUAL">Casual Leave</option>
+                <option value="SICK">Sick Leave</option>
                 <option value="PAID">Paid Leave</option>
                 <option value="UNPAID">Unpaid Leave</option>
-                <option value="SICK">Sick Leave</option>
-                <option value="CASUAL">Casual Leave</option>
+                 <option value="COMP_OFF">Comp Off</option>
                 <option value="HALF_DAY">Half Day</option>
                 <option value="WFH">Work From Home</option>
               </select>
@@ -454,7 +476,9 @@ const apply = async () => {
                 applyMessage.includes("already") || 
                 applyMessage.includes("Failed") || 
                 applyMessage.includes("Error") ||
-                applyMessage.includes("Half day leave must be for a single date")
+                applyMessage.includes("Half day leave must be for a single date")||
+                applyMessage.includes("Not enough Comp-Off balance") ||
+                applyMessage.includes("don't have Comp-Off balance")
                   ? "text-red-600"
                   : "text-green-600"
               }`}>
@@ -555,10 +579,11 @@ function TodayPopup({
             setTodayForm({ ...todayForm, type: e.target.value })
           }
         >
-          <option value="SICK">Sick Leave</option>
           <option value="CASUAL">Casual Leave</option>
+          <option value="SICK">Sick Leave</option>
           <option value="PAID">Paid Leave</option>
           <option value="UNPAID">Unpaid Leave</option>
+          <option value="COMP_OFF">Comp Off</option>
           <option value="HALF_DAY">Half Day</option>
           <option value="WFH">Work From Home</option>
         </select>
@@ -616,7 +641,10 @@ function TodayPopup({
                 todayApplyMessage.includes("already") || 
                 todayApplyMessage.includes("Failed") || 
                 todayApplyMessage.includes("Error") ||
-                todayApplyMessage.includes("Half day leave must be for a single date")
+                todayApplyMessage.includes("Half day leave must be for a single date")||
+                todayApplyMessage.includes("Not enough Comp-Off balance") ||
+                todayApplyMessage.includes("don't have Comp-Off balance")
+
                   ? "text-red-600"
                   : "text-green-600"
               }`}>
@@ -650,7 +678,9 @@ function LeaveItem({ l, isAdmin, updateStatus }) {
         <div className="text-lg font-semibold">
           {l.type === "WFH" ? (
             <span className="text-blue-600">Work From Home</span>
-          ) : l.type === "PAID" ? (
+          ) :l.type === "COMP_OFF" ? (
+            <span className="text-yellow-400">Comp Off</span>
+          ) :l.type === "PAID" ? (
             <span className="text-green-600">Paid Leave</span>
           ) : l.type === "SICK" ? (
             <span className="text-yellow-600">Sick Leave</span>

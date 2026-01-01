@@ -37,6 +37,44 @@ function toLocalISO(date) {
     String(d.getDate()).padStart(2, "0")
   );
 }
+// ================= Auto Grant Comp-Off on Weekly Off Work =================
+async function autoGrantCompOff(userId, workDate) {
+  const dayName = new Date(workDate).toLocaleDateString("en-US",{ weekday:"long" });
+
+  // Check user weekly-off config
+  const weeklyOff = await prisma.weeklyOff.findFirst({
+    where:{ userId, offDay: dayName, isFixed:true }
+  });
+
+  if(!weeklyOff) return; // not weekly-off
+
+  // Prevent duplicate grant for same date
+  const already = await prisma.compOff.findFirst({
+    where:{ userId, workDate:new Date(workDate) }
+  });
+
+  if(already) return;
+
+  // Grant comp-off record
+  await prisma.compOff.create({
+    data:{
+      userId,
+      workDate:new Date(workDate),
+      duration:1,
+      status:"APPROVED",
+      approvedAt:new Date(),
+      note:"Worked on weekly-off"
+    }
+  });
+
+  // Increase user balance
+  await prisma.user.update({
+    where:{ id:userId },
+    data:{ compOffBalance:{ increment:1 } }
+  });
+
+  console.log("🎉 Comp-Off Auto Granted for working on weekly off");
+}
 
 /* =======================================================
    CHECK-IN
@@ -93,14 +131,17 @@ export const checkIn = async (req, res) => {
       return res.json({ success: true, message: "Already checked in", attendance: existing });
     }
 
-    const created = await prisma.attendance.create({
-      data: {
-        userId: user.id,
-        date: now,
-        checkIn: now,
-        status
-      }
-    });
+ const localDay = new Date(todayISO + "T00:00:00"); // Safe full-day date
+
+const created = await prisma.attendance.create({
+  data: {
+    userId: user.id,
+    date: localDay,   // Always store pure calendar day
+    checkIn: now,
+    status
+  }
+});
+
 
     return res.json({ success: true, message: "Checked in (new)", attendance: created });
 
@@ -119,11 +160,14 @@ export const checkOut = async (req, res) => {
     if (!user) return res.status(401).json({ success: false, message: "Not authenticated" });
     if (user.role === "ADMIN") return res.status(403).json({ success: false, message: "Admin cannot check out" });
 
+    const todayISO = toLocalISO(new Date());
     const { s, e } = todayRange();
-
-    const existing = await prisma.attendance.findFirst({
-      where: { userId: user.id, date: { gte: s, lte: e } }
-    });
+const existing = await prisma.attendance.findFirst({
+  where: {
+    userId: user.id,
+   date: { gte: new Date(todayISO+"T00:00:00"), lte: new Date(todayISO+"T23:59:59.999") }
+  }
+});
 
     if (!existing)
       return res.status(400).json({ success: false, message: "You have not checked in today" });
@@ -135,7 +179,8 @@ export const checkOut = async (req, res) => {
       where: { id: existing.id },
       data: { checkOut: new Date() }
     });
-
+    // ⭐ Auto Comp-Off Grant if worked on weekly off
+    await autoGrantCompOff(user.id, existing.date);
     return res.json({ success: true, message: "Checked out", attendance: updated });
   } catch (err) {
     console.error("[checkOut ERROR]", err);

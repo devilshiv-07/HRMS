@@ -108,10 +108,14 @@ export const createReimbursement = async (req, res) => {
     const { title, description, bills } = req.body;
 
     if (!title || !bills?.length)
-      return res
-        .status(400)
-        .json({ success: false, message: "Title & bills required" });
+      return res.status(400).json({
+        success: false,
+        message: "Title & bills required"
+      });
 
+    /* =====================================================
+       1️⃣ Create reimbursement base entry
+    ====================================================== */
     const reimbursement = await prisma.reimbursement.create({
       data: {
         userId: req.user.id,
@@ -128,55 +132,110 @@ export const createReimbursement = async (req, res) => {
       },
       include: { bills: true },
     });
-/* ================= 📧 MAIL TO ADMIN + MANAGER ================= */
-try {
-  const approverEmails = await getAdminAndManagers(req.user.id);
 
-  if (approverEmails.length > 0) {
-    await sendRequestNotificationMail({
-      to: approverEmails,
-      subject: "New Reimbursement Request Submitted",
-      title: "Reimbursement Request",
-      employeeName: `${req.user.firstName} ${req.user.lastName}`,
-      details: [
-        `Title: ${title}`,
-        `Total Amount: ₹${calculateTotal(bills)}`,
-        description && `Description: ${description}`,
-      ].filter(Boolean),
-    });
+    /* =====================================================
+       2️⃣ Auto-Assign APPROVERS based on ALL employee departments
+          ✔ Multiple departments supported
+          ✔ Self manager exclusion
+          ✔ No duplicate managers
+          ✔ Admin fallback if no manager exists
+    ====================================================== */
+    
+/* ================== FINAL MULTI-DEPT MANAGER APPROVER ASSIGN ================== */
+
+const employee = await prisma.user.findUnique({
+  where: { id: req.user.id },
+  include: {
+    departments: {
+      include: {
+        department: {
+          include: { managers: true }
+        }
+      }
+    }
   }
-} catch (mailErr) {
-  console.error("Reimbursement notification mail failed:", mailErr.message);
+});
+
+// Collect all managers from ALL departments where employee exists
+let approvers = employee.departments.flatMap(d => d.department.managers);
+
+// Remove duplicate managers
+approvers = approvers.filter((v,i,a)=>a.findIndex(t=>t.id===v.id)===i);
+
+// ❗ Remove requesting user if he is also manager (prevent self approval)
+approvers = approvers.filter(m => m.id !== req.user.id);
+
+// If after filter no manager remains → stop (DON'T fallback to admin)
+if(approvers.length === 0){
+  return res.status(400).json({
+    success:false,
+    message:"No manager available for approval"
+  });
 }
-    res.json({
+
+// Create approval entries
+await prisma.reimbursementApproval.createMany({
+  data: approvers.map(m=>({
+    reimbursementId: reimbursement.id,
+    managerId: m.id,
+    status:"PENDING"
+  })),
+  skipDuplicates:true
+});
+
+    /* =====================================================
+       3️⃣ Mail to Admin/Managers
+    ====================================================== */
+    try {
+      const approverEmails = await getAdminAndManagers(req.user.id);
+
+      if (approverEmails.length > 0) {
+        await sendRequestNotificationMail({
+          to: approverEmails,
+          subject: "New Reimbursement Request Submitted",
+          title: "Reimbursement Request",
+          employeeName: `${req.user.firstName} ${req.user.lastName || ""}`,
+          details: [
+            `Title: ${title}`,
+            `Total Amount: ₹${calculateTotal(bills)}`,
+            description && `Description: ${description}`
+          ].filter(Boolean),
+        });
+      }
+    } catch (mailErr) {
+      console.error("Reimbursement notification mail failed:", mailErr.message);
+      // Mail failure should not block request
+    }
+
+    return res.json({
       success: true,
-      message: "Reimbursement submitted",
-      reimbursement,
+      message: "Reimbursement submitted successfully",
+      reimbursementId: reimbursement.id,
     });
+
   } catch (e) {
-    res.status(500).json({ success: false, message: "Server error" });
+    console.error("createReimbursement ERROR:", e);
+    return res.status(500).json({
+      success: false,
+      message: "Server error"
+    });
   }
 };
 
 /* =====================================================
    👤 EMPLOYEE — MY LIST
 ===================================================== */
-export const myReimbursements = async (req, res) => {
-  try {
-    const list = await prisma.reimbursement.findMany({
-      where: {
-        userId: req.user.id,
-        isEmployeeDeleted: false,
-      },
-      include: { bills: true },
-      orderBy: { createdAt: "desc" },
-    });
-
-    res.json({ success: true, list });
-  } catch (e) {
-    res.status(500).json({ success: false, message: "Failed" });
-  }
-};
+export const myReimbursements = async (req,res)=>{
+  const list = await prisma.reimbursement.findMany({
+    where:{ userId:req.user.id,isEmployeeDeleted:false },
+    include:{
+      bills:true,
+      approvals:{ include:{ manager:true }}  // ⚡ same include
+    },
+    orderBy:{createdAt:"desc"}
+  })
+  res.json({success:true,list})
+}
 
 /* =====================================================
    👤 EMPLOYEE — SOFT DELETE
@@ -208,45 +267,24 @@ export const getManagerReimbursements = async (req, res) => {
         user: {
           departments: {
             some: {
-              department: {
-                managers: {
-                  some: {
-                    id: managerId,
-                  },
-                },
-              },
-            },
-          },
-        },
+              department: { managers: { some: { id: managerId } } }
+            }
+          }
+        }
       },
       include: {
-        user: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-            email: true,
-            position: true,
-          },
-        },
-        bills: true,          // ✅ bills
+        user: true,
+        bills: true,
+        approvals: {                    // 🔥 add this
+          include: { manager: true }    // 🔥 manager data
+        }
       },
-      orderBy: {
-        createdAt: "desc",
-      },
+      orderBy:{ createdAt:"desc" }
     });
 
-    res.json({
-      success: true,
-      list: reimbursements,
-    });
-  } catch (err) {
-    console.error("MANAGER REIMBURSEMENTS ERROR:", err);
-    res.status(500).json({
-      success: false,
-      message: "Server error",
-    });
+    res.json({ success:true, list:reimbursements });
   }
+  catch(err){ res.status(500).json({success:false}) }
 };
 
 export const getAllReimbursements = async (req, res) => {
@@ -269,88 +307,167 @@ export const getAllReimbursements = async (req, res) => {
 /* =====================================================
    👑 ADMIN — APPROVE / REJECT
 ===================================================== */
+/* =====================================================
+   ⭐ MANAGER + ADMIN — APPROVE / REJECT (FINAL VERSION)
+===================================================== */
 export const updateReimbursementStatus = async (req, res) => {
   try {
-    const { status, reason } = req.body;
-    const id = req.params.id;
+    const reimbursementId = req.params.id;
+    let { status, reason } = req.body;
+    const managerId = req.user.id;
 
     if (!["APPROVED", "REJECTED"].includes(status)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid status",
-      });
+      return res.status(400).json({ success: false, message: "Invalid status" });
     }
 
-    /* ================= 🔥 NEW PART ================= */
-
-    // 1️⃣ Fetch reimbursement owner
-    const record = await prisma.reimbursement.findUnique({
-      where: { id },
-      select: { userId: true },
+    /* 1️⃣ Fetch reimbursement + managers */
+    const reimbursement = await prisma.reimbursement.findUnique({
+      where: { id: reimbursementId },
+      include: {
+        user: {
+          include: {
+            departments: { include: { department: { include: { managers: true } } } }
+          }
+        },
+        approvals: true, // important
+      }
     });
 
-    if (!record) {
-      return res.status(404).json({
-        success: false,
-        message: "Reimbursement not found",
-      });
+    if (!reimbursement) {
+      return res.status(404).json({ success: false, message: "Reimbursement not found" });
     }
 
-    // 2️⃣ ❌ BLOCK SELF APPROVAL
-    if (record.userId === req.user.id) {
-      return res.status(403).json({
-        success: false,
-        message: "You cannot approve or reject your own reimbursement",
-      });
+    /* 2️⃣ Block self-approval */
+    if (reimbursement.userId === managerId) {
+      return res.status(403).json({ success: false, message: "You cannot approve your own reimbursement" });
     }
 
-    /* ================= ACCESS CONTROL ================= */
+    /* 3️⃣ Permission Check */
+    const managerIds = reimbursement.user.departments.flatMap(d =>
+      d.department.managers.map(m => m.id)
+    );
 
-    if (req.user.role === "ADMIN") {
-      // Admin → full access
+    const isManager = managerIds.includes(managerId);
+    const isAdmin = req.user.role === "ADMIN";
+
+    if (!isAdmin && !isManager) {
+      return res.status(403).json({ success: false, message: "Not allowed" });
+    }
+
+    /* =====================================================
+       🔥 RECORD APPROVAL ENTRY
+    ====================================================== */
+    if (isAdmin) {
+      // Admin = direct approval entry
+      await prisma.reimbursementApproval.upsert({
+        where: { reimbursementId_managerId: { reimbursementId, managerId } },
+        update: { status, reason, actedAt: new Date() },
+        create: { reimbursementId, managerId, status, reason }
+      });
     } else {
-      // Manager → only department employees
-      await validateManagerReimbursementAccess(id, req.user.id);
+      // Manager only updates own decision
+      const updated = await prisma.reimbursementApproval.updateMany({
+        where: { reimbursementId, managerId },
+        data: { status, reason, actedAt: new Date() }
+      });
+
+      if (updated.count === 0) {
+        return res.status(403).json({ success: false, message: "Not assigned as approver" });
+      }
     }
 
-    /* ================================================= */
+    /* =====================================================
+       🔍 FINAL DECISION CHECK (Leave जैसा)
+    ====================================================== */
+      const approvals = await prisma.reimbursementApproval.findMany({
+       where: { reimbursementId },
+       include:{ manager:true }        // ⭐ इस line से ही role मिलेगा
+      });
 
-    const reimbursement = await updateStatus({
-      id,
-      status,
-      reason,
+/* ===========================================
+   🔍 Final Approval Evaluation (Your Logic)
+   - All managers approve  → Approved
+   - OR Admin approve      → Approved
+   - Any reject            → Rejected
+   - Else                  → Pending
+=========================================== */
+/* =====================================================
+   🔥 UPDATED FINAL LOGIC — IMPORTANT CHANGE
+===================================================== */
+
+//-------------------------------------------------------------
+// FINAL APPROVAL EVALUATION
+//-------------------------------------------------------------
+const anyRejected = approvals.some(a => a.status === "REJECTED");
+
+const managerApprovals = approvals.filter(a => a.manager.role !== "ADMIN");
+const allManagersApproved = managerApprovals.length > 0 && managerApprovals.every(a => a.status === "APPROVED");
+
+const adminApproved = approvals.some(a => a.manager.role === "ADMIN" && a.status === "APPROVED");
+
+// check if requester is also a manager
+const requesterIsManager = managerIds.includes(reimbursement.userId);
+
+let finalStatus = "PENDING";
+
+// ❌ If ANY rejection → reject
+if(anyRejected){
+  finalStatus = "REJECTED";
+}
+
+// 🔥 CASE-1 : requester is manager → (all managers + admin both required)
+else if(requesterIsManager){
+  if(allManagersApproved && adminApproved){
+    finalStatus = "APPROVED";
+  }
+}
+
+// 🔥 CASE-2 : normal employee → (either all managers OR admin)
+else{
+  if(allManagersApproved || adminApproved){
+    finalStatus = "APPROVED";
+  }
+}
+// else pending रहेगी
+
+    /* =====================================================
+       📝 Update Final Table Status
+    ====================================================== */
+    const updated = await prisma.reimbursement.update({
+      where: { id: reimbursementId },
+      data: {
+        status: finalStatus,
+        rejectReason: finalStatus === "REJECTED" ? reason || "" : null
+      },
+      include: { user: true }
     });
 
-    /* ================= 📧 MAIL TO EMPLOYEE ================= */
+    /* 📩 Email Notification */
     try {
       await sendRequestNotificationMail({
-        to: [reimbursement.user.email],
-        subject: `Reimbursement ${status}`,
+        to: [updated.user.email],
+        subject: `Reimbursement ${finalStatus}`,
         title: "Reimbursement Status Update",
-        employeeName: `${reimbursement.user.firstName} ${reimbursement.user.lastName}`,
+        employeeName: `${updated.user.firstName} ${updated.user.lastName || ""}`,
         details: [
-          `Title: ${reimbursement.title}`,
-          `Amount: ₹${reimbursement.totalAmount}`,
-          `Status: ${status}`,
-          status === "REJECTED" && `Reason: ${reason || "Not specified"}`,
-        ].filter(Boolean),
+          `Total Amount: ₹${updated.totalAmount}`,
+          `Status: ${finalStatus}`,
+          finalStatus === "REJECTED" && `Reason: ${reason || "Not specified"}`
+        ].filter(Boolean)
       });
     } catch (mailErr) {
-      console.error("Reimbursement approve/reject mail failed:", mailErr.message);
+      console.log("Mail failed:", mailErr.message);
     }
 
     return res.json({
       success: true,
-      message: `Reimbursement ${status.toLowerCase()}`,
-      reimbursement,
+      message: `Reimbursement ${finalStatus.toLowerCase()}`,
+      reimbursement: updated,
     });
 
-  } catch (e) {
-    console.error("updateReimbursementStatus ERROR:", e);
-    return res.status(403).json({
-      success: false,
-      message: e.message,
-    });
+  } catch (error) {
+    console.error("updateReimbursementStatus ERROR:", error);
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 

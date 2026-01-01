@@ -59,6 +59,7 @@ const menus = [
   },
 
   { title: "Employees", icon: <FiUsers />, path: "/employees", adminOnly: true },
+  { title: "Weekly Off", icon: <FiClock />, path: "/weekly-off", adminOnly: true },
   { title: "Departments", icon: <FiGrid />, path: "/departments", adminOnly: true },
   { title: "Attendance", icon: <FiClock />, path: "/attendance" },
   { title: "Leaves/WFH", icon: <FiBookOpen />, path: "/leaves" },

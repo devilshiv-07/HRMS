@@ -459,7 +459,6 @@ function LeavesTable({ leaves, approveLeave, rejectLeave }) {
     <th className="text-left">Dates</th>
     <th className="text-left">Status</th>
     <th className="text-left">Reject Reason</th> {/* ✅ NEW */}
-    <th />
   </tr>
 </thead>
       <tbody>
@@ -530,7 +529,6 @@ function ReimbursementsTable({ reimbursements, approve, reject }) {
           <th className="text-left">Bills</th>
           <th className="text-left">Status</th>
           <th className="text-left">Reject Reason</th> {/* ✅ NEW */}
-          <th />
         </tr>
       </thead>
       <tbody>

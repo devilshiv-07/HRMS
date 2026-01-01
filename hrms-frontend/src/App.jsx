@@ -13,10 +13,9 @@ import Profile from "./pages/Profile";
 import Unauthorized from "./pages/Unauthorized";
 
 import EmployeeView from "./pages/EmployeeView";
-
 import Reimbursement from "./pages/Reimbursement.jsx";
-
 import Resignation from "./pages/Resignation.jsx";
+import WeeklyOff from "./pages/WeeklyOff";     // ✔ Real component name
 
 import useAuthStore from "./stores/authstore";
 import api from "./api/axios";
@@ -75,6 +74,16 @@ export default function App() {
           </ProtectedRoute>
         }
       />
+<Route
+  path="/weekly-off"
+  element={
+    <ProtectedRoute allowedRoles={["ADMIN"]}>
+      <LayoutPremium>
+        <WeeklyOff />       {/* ✔ fixed */}
+      </LayoutPremium>
+    </ProtectedRoute>
+  }
+/>
 
       <Route
         path="/departments"

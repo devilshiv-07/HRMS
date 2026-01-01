@@ -135,6 +135,8 @@ function LeaveItem({ l, updateStatus, deleteLeave, openRejectPopup,approveLoadin
 
 export default function LeavesAdmin() {
   const [leaves, setLeaves] = useState([]);
+  const [compOff, setCompOff] = useState([]);   // ⭐ New
+  const [tab, setTab] = useState("leave"); 
   const [page, setPage] = useState(1);
   const PAGE_SIZE = 10;
 
@@ -170,17 +172,30 @@ export default function LeavesAdmin() {
     return () => clearTimeout(t);
   }, [msg]);
 
-  const load = async () => {
-    try {
-      setLoading(true);
-      const r = await api.get("/leaves");
-      setLeaves(r.data.leaves || []);
-    } catch (err) {
-      setMsg("Failed to load leaves");
-      setMsgType("error");
-    }
-    setLoading(false);
-  };
+const load = async () => {
+  setLoading(true);
+
+  // 1️⃣ Leaves Load
+  try {
+    const r = await api.get("/leaves");
+    setLeaves(r.data.leaves || []);
+  } catch (err) {
+    setMsg("Failed to load leaves");
+    setMsgType("error");
+  }
+
+  // 2️⃣ Comp-Off Load
+  try {
+    const c = await api.get("/comp-off");
+    setCompOff(c.data.data || []);
+  } catch (err) {
+    setMsg("Failed to load comp-off");
+    setMsgType("error");
+  }
+
+  setLoading(false);
+};
+
 
   useEffect(() => {
     load();
