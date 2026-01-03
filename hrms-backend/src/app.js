@@ -20,7 +20,7 @@ import managerRoutes from "./routes/managerRoutes.js";
 import resignationRoutes from "./routes/resignationRoutes.js";
 import weeklyOffRoutes from "./routes/weeklyOffRoutes.js";
 import compOffRoutes from "./routes/compOffRoutes.js";   // <--- add import top
-
+import holidayRoutes from "./routes/holidayRoutes.js"; 
 
 const app = express();
 
@@ -94,6 +94,7 @@ app.use("/api/manager", managerRoutes);
 app.use("/api/resignation", resignationRoutes);
 app.use("/api/weekly-off", weeklyOffRoutes);
 app.use("/api/comp-off", compOffRoutes); 
+app.use("/api/holidays", holidayRoutes);
 
 /* ============================================================
    HEALTH CHECK

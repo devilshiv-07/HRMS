@@ -4,6 +4,7 @@ import api from "../api/axios";
 import useAuthStore from "../stores/authstore";
 import { FiPlusCircle, FiCalendar, FiClock } from "react-icons/fi";
 import EmployeeDropdown from "../components/EmployeeDropdown";
+import ConfirmDelPopup from "../components/ConfirmDelPopup";
 
 // --- Merge overlapping leave date ranges (unique days) ---
 function getUniqueLeaveDays(leaves) {
@@ -77,6 +78,8 @@ export default function Leaves() {
   const [todayApplyMessage, setTodayApplyMessage] = useState("");
   const [applyLoading, setApplyLoading] = useState(false);
   const [todayLoading, setTodayLoading] = useState(false);
+  const [showDelete, setShowDelete] = useState(false);
+  const [deleteId, setDeleteId] = useState(null);
 
   const [form, setForm] = useState({
     type: "CASUAL",
@@ -113,6 +116,21 @@ export default function Leaves() {
     if (l.type === "HALF_DAY") return 0.5;
     return getDays(l);
   };
+  
+const confirmDeleteLeave = async () => {
+  try {
+    await api.delete(`/leaves/${deleteId}`);
+    setMsg("Leave deleted successfully");
+    setMsgType("success");
+    load();
+  } catch (err) {
+    setMsg(err?.response?.data?.message || "Failed to delete leave");
+    setMsgType("error");
+  } finally {
+    setShowDelete(false);
+    setDeleteId(null);
+  }
+};
 
   // ⭐ Unique approved leave days (excluding WFH and UNPAID)
   const approvedLeaveDays = getUniqueLeaveUnits(
@@ -505,14 +523,18 @@ const apply = async () => {
           </p>
         ) : (
           <div className="space-y-4 max-h-[450px] overflow-y-auto pr-2">
-            {paginatedLeaves.map((l) => (
-              <LeaveItem
-                key={l.id}
-                l={l}
-                isAdmin={isAdmin}
-                updateStatus={updateStatus}
-              />
-            ))}
+     {paginatedLeaves.map((l) => (
+  <LeaveItem
+    key={l.id}
+    l={l}
+    isAdmin={isAdmin}
+    updateStatus={updateStatus}
+    onDelete={(id) => {
+      setDeleteId(id);
+      setShowDelete(true);
+    }}
+  />
+))}
           </div>
         )}
         {totalPages > 1 && (
@@ -535,6 +557,17 @@ const apply = async () => {
           </div>
         )}
       </GlassCard>
+      {showDelete && (
+  <ConfirmDelPopup
+    title="Delete Leave?"
+    message="Are you sure you want to delete this leave request? This action cannot be undone."
+    onConfirm={confirmDeleteLeave}
+    onCancel={() => {
+      setShowDelete(false);
+      setDeleteId(null);
+    }}
+  />
+)}
 
       {showTodayPopup && (
   <TodayPopup
@@ -658,7 +691,7 @@ function TodayPopup({
   );
 }
 
-function LeaveItem({ l, isAdmin, updateStatus }) {
+function LeaveItem({ l, isAdmin, updateStatus, onDelete }) {
   const getDays = () => {
     if (!l?.startDate || !l?.endDate) return 0;
     const s = new Date(l.startDate);
@@ -673,7 +706,7 @@ function LeaveItem({ l, isAdmin, updateStatus }) {
   };
 
   return (
-    <div className="p-5 rounded-2xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 shadow flex justify-between items-center">
+    <div className="relative p-5 rounded-2xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 shadow">
       <div>
         <div className="text-lg font-semibold">
           {l.type === "WFH" ? (
@@ -715,8 +748,16 @@ function LeaveItem({ l, isAdmin, updateStatus }) {
           </div>
         )}
       </div>
-
-      <div className="flex items-center gap-3">
+{!isAdmin && l.status === "PENDING" && (
+  <button
+    onClick={() => onDelete(l.id)}
+    className="absolute top-3 right-3 text-red-500 hover:text-red-700 font-bold text-xl"
+    title="Delete leave"
+  >
+    ✕
+  </button>
+)}
+     <div className="flex items-center gap-3">
         <span
           className={`px-4 py-1 rounded-full text-white text-sm font-medium ${
             l.status === "APPROVED"

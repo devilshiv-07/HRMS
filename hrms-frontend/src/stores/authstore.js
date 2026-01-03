@@ -67,6 +67,30 @@ const useAuthStore = create((set) => ({
 
     window.location.href = "/login";
   },
+  
+refreshUser: async () => {
+  try {
+    const res = await fetch("/users/me", {
+      headers: {
+        Authorization: `Bearer ${localStorage.getItem("hrms_access")}`,
+      },
+    });
+
+    const data = await res.json();
+
+    if (data.success) {
+      set((state) => ({
+        user: {
+          ...state.user,
+          ...data.user,   // ✅ ONLY THIS
+        },
+      }));
+    }
+  } catch (err) {
+    console.error("Failed to refresh user", err);
+  }
+},
+
 }));
 
 export default useAuthStore;

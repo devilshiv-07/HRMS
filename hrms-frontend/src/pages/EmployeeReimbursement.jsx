@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import api from "../api/axios";
+import ConfirmDelPopup from "../components/ConfirmDelPopup";
 
 /* ----------------- STATUS COLORS ----------------- */
 const statusColor = {
@@ -9,11 +10,28 @@ const statusColor = {
 };
 
 /* ----------------- TOAST MESSAGE ----------------- */
-const Toast = ({ msg }) => (
-  <div className="fixed bottom-6 right-6 bg-black/80 text-white px-4 py-2 rounded-lg shadow-lg text-sm animate-fadeIn">
-    {msg}
-  </div>
-);
+/* ----------------- TOAST MESSAGE (FIXED) ----------------- */
+const Toast = ({ msg, type = "success" }) => {
+  const colorMap = {
+    success: "bg-green-600",
+    error: "bg-red-600",
+    info: "bg-blue-600",
+    warn: "bg-yellow-500 text-black",
+  };
+
+  return (
+    <div
+      className={`
+        ${colorMap[type]}
+        text-white px-4 py-2 rounded-lg shadow
+        text-sm mb-4
+        animate-fadeIn
+      `}
+    >
+      {msg}
+    </div>
+  );
+};
 
 export default function EmployeeReimbursement() {
   const [title, setTitle] = useState("");
@@ -24,13 +42,17 @@ export default function EmployeeReimbursement() {
   const [uploading, setUploading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState("");
+  const [showDelete, setShowDelete] = useState(false);
+  const [selectedId, setSelectedId] = useState(null);
 
   /* SHOW MESSAGE 2 SEC */
-  const showMsg = (msg) => {
-    setMessage(msg);
-    setTimeout(() => setMessage(""), 2000);
-  };
+const [toastType, setToastType] = useState("success");
 
+const showMsg = (msg, type = "success") => {
+  setToastType(type);
+  setMessage(msg);
+  setTimeout(() => setMessage(""), 2000);
+};
   /* LOAD MY REIMBURSEMENTS */
   const loadMy = async () => {
     const res = await api.get("/reimbursement/me");
@@ -65,21 +87,29 @@ export default function EmployeeReimbursement() {
       }));
 
       setBills((prev) => [...prev, ...uploaded]);
-      showMsg("Files uploaded!");
+      showMsg("Files uploaded!", "success");
     } finally {
       setUploading(false);
     }
   };
 
+const confirmDelete = async () => {
+  await api.delete(`/reimbursement/me/${selectedId}`);
+  setShowDelete(false);
+  setSelectedId(null);
+  loadMy();
+  showMsg("Request deleted", "success");
+};
+
   /* ======================================================
          SUBMIT FORM
   ====================================================== */
   const submitForm = async () => {
-    if (!title.trim()) return showMsg("Title is required");
-    if (bills.length === 0) return showMsg("Upload at least 1 bill");
+   if (!title.trim()) return showMsg("Title is required", "error");
+   if (bills.length === 0) return showMsg("Upload at least 1 bill", "error");
 
     const invalidBill = bills.find((b) => !b.fileUrl || !b.amount);
-    if (invalidBill) return showMsg("Each bill must have amount");
+   if (invalidBill) return showMsg("Each bill must have amount", "error");
 
     try {
       setSubmitting(true);
@@ -95,7 +125,7 @@ export default function EmployeeReimbursement() {
       setBills([]);
 
       loadMy();
-      showMsg("Reimbursement submitted!");
+     showMsg("Reimbursement submitted!", "success");
     } finally {
       setSubmitting(false);
     }
@@ -104,7 +134,7 @@ export default function EmployeeReimbursement() {
   return (
     <div className="space-y-6 max-w-5xl mx-auto p-4">
 
-      {message && <Toast msg={message} />}
+    {message && <Toast msg={message} type={toastType} />}
 
       {/* FORM CARD */}
       <div className="bg-white dark:bg-gray-900 p-6 rounded-xl shadow border dark:border-gray-700">
@@ -233,16 +263,15 @@ export default function EmployeeReimbursement() {
     >
       {/* DELETE BUTTON FOR PENDING & REJECTED (EMPLOYEE ONLY) */}
       {["PENDING", "REJECTED"].includes(r.status) && (
-        <button
-          onClick={async () => {
-            await api.delete(`/reimbursement/me/${r.id}`);
-            loadMy();
-            showMsg("Request deleted");
-          }}
-          className="absolute top-3 right-3 text-red-600 hover:text-red-800 font-bold"
-        >
-          ✕
-        </button>
+<button
+  onClick={() => {
+    setSelectedId(r.id);
+    setShowDelete(true);
+  }}
+  className="absolute top-3 right-3 text-red-600 hover:text-red-800 font-bold"
+>
+  ✕
+</button>
       )}
 
       <div className="flex justify-between pr-6">
@@ -283,6 +312,17 @@ export default function EmployeeReimbursement() {
   ))}
 </div>
         )}
+        {showDelete && (
+  <ConfirmDelPopup
+    title="Delete Reimbursement?"
+    message="Are you sure you want to delete this reimbursement request? This action cannot be undone."
+    onConfirm={confirmDelete}
+    onCancel={() => {
+      setShowDelete(false);
+      setSelectedId(null);
+    }}
+  />
+)}
       </div>
 
       {/* Scrollbar */}

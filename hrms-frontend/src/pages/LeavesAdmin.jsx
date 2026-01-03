@@ -78,7 +78,12 @@ function LeaveItem({ l, updateStatus, deleteLeave, openRejectPopup,approveLoadin
             <b>Reason:</b> {l.reason}
           </div>
         )}
-
+{l.responsiblePerson && (
+  <div className="text-xs text-gray-500 mt-1">
+    <b>Responsibility Given To:</b>{" "}
+    {l.responsiblePerson.firstName} {l.responsiblePerson.lastName}
+  </div>
+)}
         {/* SHOW REJECT REASON IF LEAVE IS REJECTED */}
         {l.status === "REJECTED" && l.rejectReason && (
           <div className="text-xs text-red-500 mt-1">

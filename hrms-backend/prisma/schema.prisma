@@ -263,6 +263,16 @@ model LeaveApproval {
   @@unique([leaveId, managerId]) // 1 manager = 1 decision per leave
 }
 
+/// ===================== HOLIDAY =====================
+model Holiday {
+  id          String   @id @default(uuid())
+  title       String
+  date        DateTime @unique
+  day         String
+  description String?
+  createdAt   DateTime @default(now())
+}
+
 model ReimbursementApproval {
   id              String                      @id @default(uuid())
   reimbursementId String

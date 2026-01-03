@@ -3,7 +3,7 @@ import { sendRequestNotificationMail } from "../utils/sendMail.js";
 import { getAdminAndManagers } from "../utils/getApprovers.js";
 
 const isHalfDay = (type) => type === "HALF_DAY";
-
+const getDayName = (d) => new Date(d).toLocaleDateString("en-US",{weekday:"long"});
 /* ================= HELPERS ================= */
 const getLeaveTypeName = (type) => {
   const typeNames = {
@@ -40,7 +40,44 @@ export const createLeave = async (req, res) => {
     if (isHalfDay(type) && startDate !== endDate) {
       return res.status(400).json({ success: false, message: "Half Day must be for a single date" });
     }
+// ================== HOLIDAY CHECK ==================
+const holidays = await prisma.holiday.findMany({
+  where:{
+    date:{ gte:new Date(startDate), lte:new Date(endDate) }
+  }
+});
 
+if(holidays.length>0){
+  return res.status(400).json({
+    success:false,
+    message:`Cannot apply leave on holiday (${holidays[0].title})`
+  });
+}
+
+// ================== WEEKOFF CHECK ==================
+const weekOff = await prisma.weeklyOff.findFirst({ where:{ userId:req.user.id } });
+
+if(weekOff){
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  let cur = new Date(start);
+
+  while(cur<=end){
+    const iso = cur.toISOString().split("T")[0];
+    const dayName = getDayName(cur);
+
+    const isFixed = weekOff.isFixed && weekOff.offDay===dayName;
+    const isSpecial = !weekOff.isFixed && weekOff.offDate===iso;
+
+    if(isFixed || isSpecial){
+      return res.status(400).json({
+        success:false,
+        message:`Cannot apply leave on Weekly Off (${dayName})`
+      });
+    }
+    cur.setDate(cur.getDate()+1);
+  }
+}
     const requestStart = new Date(startDate);
     const requestEnd = new Date(endDate);
 

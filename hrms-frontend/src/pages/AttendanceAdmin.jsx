@@ -81,12 +81,16 @@ export default function AttendanceAdmin() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const [summary, setSummary] = useState({
-    present: 0,
-    absent: 0,
-    leave: 0,
-    wfh: 0,
-  });
+const [summary, setSummary] = useState({
+  totalEmployees: 0,
+  present: 0,
+  weekOffPresent: 0,
+  wfh: 0,
+  leave: 0,
+  compOff: 0,
+  weekOff: 0,
+  absent: 0,
+});
 
   const [attendance, setAttendance] = useState([]);
 
@@ -129,17 +133,24 @@ useEffect(() => {
         setAttendance(
           att.map((a) => ({
             ...a,
-            totalHours:
-              a.status === "WFH" ? "WFH" : parseHours(a.checkIn, a.checkOut),
+totalHours:
+  ["WEEKOFF", "LEAVE", "ABSENT"].includes(a.status)
+    ? "—"
+    : parseHours(a.checkIn, a.checkOut),
           }))
         );
 
-        setSummary({
-          present: res.data.summary.present,
-          absent: res.data.summary.absent,
-          leave: res.data.summary.leave,
-          wfh: att.filter((a) => a.status === "WFH").length,
-        });
+      const s = res.data.summary || {};
+setSummary({
+  totalEmployees: s.totalEmployees ?? 0,
+  present: s.present ?? 0,
+  wfh: s.wfh ?? 0,
+  leave: s.leave ?? 0,
+  compOff: s.compOff ?? 0,
+  weekOff: s.weekOff ?? 0,
+  weekOffPresent: s.weekOffPresent ?? 0,
+  absent: s.absent ?? 0,
+});
       } catch (err) {
         setError("Unable to load attendance");
       } finally {
@@ -221,6 +232,10 @@ useEffect(() => {
         <StatCard title="WFH" value={summary.wfh} color="text-blue-600" />
         <StatCard title="Leave" value={summary.leave} color="text-yellow-600" />
         <StatCard title="Absent" value={summary.absent} color="text-red-600" />
+        <StatCard title="Employees" value={summary.totalEmployees} color="text-indigo-600"/>
+        <StatCard title="Comp-Off" value={summary.compOff} color="text-yellow-400"/>
+        <StatCard title="Week Off" value={summary.weekOff} color="text-orange-400"/>
+        <StatCard title="Week-Off Present" value={summary.weekOffPresent} color="text-gray-500" />
       </div>
 
       {/* FILTER PANEL */}
@@ -374,12 +389,13 @@ function AdminFilters({ filters, setFilters, departments, employees, loadAttenda
             }
             className="w-full px-2 py-2 rounded border bg-white dark:bg-gray-900"
           >
-            <option value="">All</option>
-            <option value="PRESENT">Present</option>
-            <option value="ABSENT">Absent</option>
-            <option value="LATE">Late</option>
-            <option value="WFH">WFH</option>
-            <option value="LEAVE">Leave</option>
+<option value="PRESENT">Present</option>
+<option value="WEEKOFF_PRESENT">Week-Off Present</option>
+<option value="WEEKOFF">Week Off</option>
+<option value="WFH">WFH</option>
+<option value="HALF_DAY">Half Day</option>
+<option value="COMP_OFF">Comp-Off</option>
+<option value="ABSENT">Absent</option>
           </select>
         </div>
       </div>
@@ -398,13 +414,15 @@ function AdminFilters({ filters, setFilters, departments, employees, loadAttenda
    STATUS BADGE
 ---------------------------------------------------------- */
 function StatusBadge({ status }) {
-  const colors = {
-    PRESENT: "bg-green-100 text-green-700",
-    ABSENT: "bg-red-100 text-red-700",
-    LATE: "bg-orange-100 text-orange-700",
-    WFH: "bg-blue-100 text-blue-700",
-    LEAVE: "bg-yellow-100 text-yellow-700",
-  };
+const colors = {
+  PRESENT: "bg-green-100 text-green-700",
+  WEEKOFF_PRESENT: "bg-gray-200 text-gray-700",
+  WEEKOFF: "bg-orange-100 text-orange-700",
+  WFH: "bg-blue-100 text-blue-700",
+  HALF_DAY: "bg-yellow-100 text-yellow-700",
+  COMP_OFF: "bg-purple-100 text-purple-700",
+  ABSENT: "bg-red-100 text-red-700",
+};
 
   return (
     <span className={`px-3 py-1 rounded-lg text-xs font-semibold ${colors[status]}`}>
@@ -445,10 +463,10 @@ function MobileAttendanceCards({ rows, onView }) {
             <strong>Out:</strong> {r.status === "WFH" ? "—" : formatTime(r.checkOut)}
           </p>
 
-          <p className="text-sm">
-            <strong>Hours:</strong>{" "}
-            {r.status === "WFH" ? "WFH" : `${r.totalHours} hrs`}
-          </p>
+       <strong>Hours:</strong>{" "}
+{typeof r.totalHours === "string"
+  ? r.totalHours
+  : `${r.totalHours} hrs`}
 
           <button
             onClick={() => onView(r.userId)}
@@ -517,9 +535,12 @@ function AttendanceTable({ rows, loading, onView }) {
                     {r.status === "WFH" ? "—" : formatTime(r.checkOut)}
                   </td>
 
-                  <td className="p-2">
-                    {r.status === "WFH" ? "WFH" : `${r.totalHours} hrs`}
-                  </td>
+                 <td className="p-2">
+  {typeof r.totalHours === "string"
+    ? r.totalHours
+    : `${r.totalHours} hrs`}
+</td>
+
 
                   <td className="p-2">
                     <StatusBadge status={r.status} />
@@ -612,17 +633,16 @@ function EmployeeModal({ employee, logs, onClose }) {
                   Out: {formatTime(d.checkOut)}
                 </p>
 
-                <p className="text-xs sm:text-sm font-medium mt-1">
-                  Hours:{" "}
-                  {d.status === "WFH"
-                    ? "WFH"
-                    : parseHours(d.checkIn, d.checkOut)}
-                </p>
+<p className="text-xs sm:text-sm font-medium mt-1">
+  Hours:{" "}
+  {["WEEKOFF", "LEAVE", "ABSENT"].includes(d.status)
+    ? "—"
+    : `${parseHours(d.checkIn, d.checkOut)} hrs`}
+</p>
               </div>
             ))
           )}
         </div>
-
       </div>
     </div>
   );
