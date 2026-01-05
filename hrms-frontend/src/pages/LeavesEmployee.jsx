@@ -249,6 +249,13 @@ const apply = async () => {
   
   const days = calcLeaveDays(form.startDate, form.endDate);
 
+  // 🔥 RULE 1: WFH → reason compulsory (any duration)
+  if (form.type === "WFH" && !form.reason.trim()) {
+    setApplyMessage("Reason is mandatory for Work From Home");
+    setMsg("Reason is mandatory for Work From Home");
+    setMsgType("error");
+    return;
+  }
   // 🔥 RULE: 3+ days → reason compulsory
   if (days >= 3 && !form.reason.trim()) {
     setApplyMessage("Reason is mandatory for leave of 3 days or more");
@@ -302,6 +309,14 @@ const apply = async () => {
   const submitTodayLeave = async () => {
     setTodayLoading(true);  
     const today = new Date().toISOString().slice(0, 10);
+
+    if (todayForm.type === "WFH" && !todayForm.reason.trim()) {
+  setTodayApplyMessage("Reason is mandatory for Work From Home");
+  setMsg("Reason is mandatory for Work From Home");
+  setMsgType("error");
+  setTodayLoading(false);
+  return;
+}
     // ⭐ Block if comp-off balance is zero
     if (todayForm.type === "COMP_OFF" && (user?.compOffBalance ?? 0) <= 0) {
        setMsg("You don't have Comp-Off balance");
@@ -473,15 +488,22 @@ const apply = async () => {
             </div>
           </div>
           <div className="mt-4">
-           <label className="font-medium text-gray-600">
-  Reason {calcLeaveDays(form.startDate, form.endDate) >= 3 && (
+<label className="font-medium text-gray-600">
+  Reason{" "}
+  {(form.type === "WFH" || calcLeaveDays(form.startDate, form.endDate) >= 3) && (
     <span className="text-red-500">*</span>
   )}
 </label>
 
             <textarea
               rows={3}
-              placeholder={calcLeaveDays(form.startDate, form.endDate) >= 3 ? "Reason is required beyond three days leave": "Enter reason (optional)" }
+                placeholder={
+    form.type === "WFH"
+      ? "Reason is required for Work From Home"
+      : calcLeaveDays(form.startDate, form.endDate) >= 3
+      ? "Reason is required beyond three days leave"
+      : "Enter reason (optional)"
+  }
               className="p-3 w-full rounded-xl border dark:bg-gray-900 shadow"
               value={form.reason}
               onChange={(e) => setForm({ ...form, reason: e.target.value })}

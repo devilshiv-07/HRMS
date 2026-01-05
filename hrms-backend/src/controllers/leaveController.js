@@ -90,6 +90,14 @@ if (diffDays >= 3 && !reason?.trim()) {
     message: "Reason is mandatory for leave of 3 days or more",
   });
 }
+// 🔥 RULE: WFH → reason compulsory (any duration)
+if (type === "WFH" && !reason?.trim()) {
+  return res.status(400).json({
+    success: false,
+    message: "Reason is mandatory for Work From Home",
+  });
+}
+
     // Prevent overlapping leave
     const overlappingLeaves = await prisma.leave.findMany({
       where: {
@@ -323,6 +331,18 @@ if ("responsiblePerson" in input) {
       message: "Reason is mandatory for leave of 3 days or more",
     });
   }
+  // 🔥 RULE: WFH → reason compulsory (update also)
+if (
+  (input.type || leave.type) === "WFH" &&
+  !input.reason?.trim() &&
+  !leave.reason?.trim()
+) {
+  return res.status(400).json({
+    success: false,
+    message: "Reason is mandatory for Work From Home",
+  });
+}
+
 }
 if ("responsiblePerson" in input) {
   if (input.responsiblePerson) {
