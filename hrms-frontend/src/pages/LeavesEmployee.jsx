@@ -4,6 +4,7 @@ import api from "../api/axios";
 import useAuthStore from "../stores/authstore";
 import { FiPlusCircle, FiCalendar, FiClock } from "react-icons/fi";
 import EmployeeDropdown from "../components/EmployeeDropdown";
+import ConfirmDelPopup from "../components/ConfirmDelPopup";
 
 // --- Merge overlapping leave date ranges (unique days) ---
 function getUniqueLeaveDays(leaves) {
@@ -77,6 +78,16 @@ export default function Leaves() {
   const [todayApplyMessage, setTodayApplyMessage] = useState("");
   const [applyLoading, setApplyLoading] = useState(false);
   const [todayLoading, setTodayLoading] = useState(false);
+  const [showDelete, setShowDelete] = useState(false);
+  const [deleteId, setDeleteId] = useState(null);
+
+  const calcLeaveDays = (startDate, endDate) => {
+  if (!startDate || !endDate) return 0;
+  const s = new Date(startDate);
+  const e = new Date(endDate);
+  return Math.floor((e - s) / (1000 * 60 * 60 * 24)) + 1;
+};
+
 
   const [form, setForm] = useState({
     type: "CASUAL",
@@ -113,6 +124,21 @@ export default function Leaves() {
     if (l.type === "HALF_DAY") return 0.5;
     return getDays(l);
   };
+  
+const confirmDeleteLeave = async () => {
+  try {
+    await api.delete(`/leaves/${deleteId}`);
+    setMsg("Leave deleted successfully");
+    setMsgType("success");
+    load();
+  } catch (err) {
+    setMsg(err?.response?.data?.message || "Failed to delete leave");
+    setMsgType("error");
+  } finally {
+    setShowDelete(false);
+    setDeleteId(null);
+  }
+};
 
   // ⭐ Unique approved leave days (excluding WFH and UNPAID)
   const approvedLeaveDays = getUniqueLeaveUnits(
@@ -221,6 +247,23 @@ export default function Leaves() {
 
 const apply = async () => {
   
+  const days = calcLeaveDays(form.startDate, form.endDate);
+
+  // 🔥 RULE 1: WFH → reason compulsory (any duration)
+  if (form.type === "WFH" && !form.reason.trim()) {
+    setApplyMessage("Reason is mandatory for Work From Home");
+    setMsg("Reason is mandatory for Work From Home");
+    setMsgType("error");
+    return;
+  }
+  // 🔥 RULE: 3+ days → reason compulsory
+  if (days >= 3 && !form.reason.trim()) {
+    setApplyMessage("Reason is mandatory for leave of 3 days or more");
+    setMsg("Reason is mandatory for leave of 3 days or more");
+    setMsgType("error");
+    return;
+  }
+
    if (form.type === "COMP_OFF" && (user?.compOffBalance ?? 0) <= 0) {
    setMsg("You don't have Comp-Off balance");
    setMsgType("error");
@@ -266,6 +309,14 @@ const apply = async () => {
   const submitTodayLeave = async () => {
     setTodayLoading(true);  
     const today = new Date().toISOString().slice(0, 10);
+
+    if (todayForm.type === "WFH" && !todayForm.reason.trim()) {
+  setTodayApplyMessage("Reason is mandatory for Work From Home");
+  setMsg("Reason is mandatory for Work From Home");
+  setMsgType("error");
+  setTodayLoading(false);
+  return;
+}
     // ⭐ Block if comp-off balance is zero
     if (todayForm.type === "COMP_OFF" && (user?.compOffBalance ?? 0) <= 0) {
        setMsg("You don't have Comp-Off balance");
@@ -437,12 +488,22 @@ const apply = async () => {
             </div>
           </div>
           <div className="mt-4">
-            <label className="font-medium text-gray-600">
-              Reason (optional)
-            </label>
+<label className="font-medium text-gray-600">
+  Reason{" "}
+  {(form.type === "WFH" || calcLeaveDays(form.startDate, form.endDate) >= 3) && (
+    <span className="text-red-500">*</span>
+  )}
+</label>
+
             <textarea
               rows={3}
-              placeholder="Enter reason..."
+                placeholder={
+    form.type === "WFH"
+      ? "Reason is required for Work From Home"
+      : calcLeaveDays(form.startDate, form.endDate) >= 3
+      ? "Reason is required beyond three days leave"
+      : "Enter reason (optional)"
+  }
               className="p-3 w-full rounded-xl border dark:bg-gray-900 shadow"
               value={form.reason}
               onChange={(e) => setForm({ ...form, reason: e.target.value })}
@@ -505,14 +566,18 @@ const apply = async () => {
           </p>
         ) : (
           <div className="space-y-4 max-h-[450px] overflow-y-auto pr-2">
-            {paginatedLeaves.map((l) => (
-              <LeaveItem
-                key={l.id}
-                l={l}
-                isAdmin={isAdmin}
-                updateStatus={updateStatus}
-              />
-            ))}
+     {paginatedLeaves.map((l) => (
+  <LeaveItem
+    key={l.id}
+    l={l}
+    isAdmin={isAdmin}
+    updateStatus={updateStatus}
+    onDelete={(id) => {
+      setDeleteId(id);
+      setShowDelete(true);
+    }}
+  />
+))}
           </div>
         )}
         {totalPages > 1 && (
@@ -535,6 +600,17 @@ const apply = async () => {
           </div>
         )}
       </GlassCard>
+      {showDelete && (
+  <ConfirmDelPopup
+    title="Delete Leave?"
+    message="Are you sure you want to delete this leave request? This action cannot be undone."
+    onConfirm={confirmDeleteLeave}
+    onCancel={() => {
+      setShowDelete(false);
+      setDeleteId(null);
+    }}
+  />
+)}
 
       {showTodayPopup && (
   <TodayPopup
@@ -658,7 +734,7 @@ function TodayPopup({
   );
 }
 
-function LeaveItem({ l, isAdmin, updateStatus }) {
+function LeaveItem({ l, isAdmin, updateStatus, onDelete }) {
   const getDays = () => {
     if (!l?.startDate || !l?.endDate) return 0;
     const s = new Date(l.startDate);
@@ -673,7 +749,7 @@ function LeaveItem({ l, isAdmin, updateStatus }) {
   };
 
   return (
-    <div className="p-5 rounded-2xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 shadow flex justify-between items-center">
+    <div className="relative p-5 rounded-2xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 shadow">
       <div>
         <div className="text-lg font-semibold">
           {l.type === "WFH" ? (
@@ -708,6 +784,15 @@ function LeaveItem({ l, isAdmin, updateStatus }) {
           </div>
         )}
 
+{/* Responsible person (if assigned) */}
+{l.responsiblePerson && (
+  <div className="text-xs text-gray-500 mt-1">
+    <b>Responsible:</b>{" "}
+    {l.responsiblePerson.firstName}{" "}
+    {l.responsiblePerson.lastName || ""}
+  </div>
+)}
+
         {/* Employee sees why admin rejected */}
         {l.status === "REJECTED" && l.rejectReason && (
           <div className="text-xs text-red-500 mt-1">
@@ -715,8 +800,18 @@ function LeaveItem({ l, isAdmin, updateStatus }) {
           </div>
         )}
       </div>
-
-      <div className="flex items-center gap-3">
+{!isAdmin && l.status === "PENDING" && (
+  <button
+    onClick={() => onDelete(l.id)}
+    className="absolute top-4 right-4 text-red-500 hover:text-red-700 
+           font-bold text-lg bg-white dark:bg-gray-900 
+           rounded-full w-7 h-7 flex items-center justify-center shadow"
+    title="Delete leave"
+  >
+    ✕
+  </button>
+)}
+     <div className="flex items-center gap-3">
         <span
           className={`px-4 py-1 rounded-full text-white text-sm font-medium ${
             l.status === "APPROVED"

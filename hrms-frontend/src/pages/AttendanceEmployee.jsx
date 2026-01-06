@@ -1,6 +1,7 @@
 // ========================= PART 1 — LOGIC (FINAL WITH KPI SUPPORT) ===========================
 import React, { useEffect, useMemo, useState, useCallback } from "react";
 import api from "../api/axios";
+import useAuthStore from "../stores/authstore";
 
 /* ------------------ HELPERS ------------------ */
 const toISODate = (d) => {
@@ -13,8 +14,7 @@ const toISODate = (d) => {
 
 const uiStatus = (s) => {
   if (!s) return "ABSENT";
-  if (s === "LATE") return "PRESENT";
-  return s;
+  return s; // backend is the single source of truth
 };
 
 const formatTime = (v) =>
@@ -104,7 +104,8 @@ export default function AttendanceEmployee() {
   const [weekOff,setWeekOff] = useState(null);
   const [checkInSuccess, setCheckInSuccess] = useState(false);
   const [checkOutSuccess, setCheckOutSuccess] = useState(false);
-
+  const [holidaysList, setHolidaysList] = useState([]);
+  const refreshUser = useAuthStore((s) => s.refreshUser);
 
   /* FULL YEAR CACHED DATA */
   const [fullData, setFullData] = useState({
@@ -117,6 +118,7 @@ export default function AttendanceEmployee() {
     present: 0,
     leave: 0,
     wfh: 0,
+    weekoffPresent: 0,
   });
 
   const [filters, setFilters] = useState(getThisWeek());
@@ -169,11 +171,11 @@ export default function AttendanceEmployee() {
       setFullData({ calendar: calendarMap, logs });
 
       /* ⭐ KPI CALCULATION (from full year) */
-      const present = Object.values(calendarMap).filter((s) => s === "PRESENT").length;
-      const leave = Object.values(calendarMap).filter((s) => s === "LEAVE").length;
-      const wfh = Object.values(calendarMap).filter((s) => s === "WFH").length;
-
-      setKpi({ present, leave, wfh });
+const present = Object.values(calendarMap).filter(s => s === "PRESENT" || s === "LATE").length;
+const leave = Object.values(calendarMap).filter( s => s === "LEAVE" || s === "HALF_DAY").length;
+const wfh = Object.values(calendarMap).filter(s => s === "WFH").length;
+const weekoffPresent = Object.values(calendarMap).filter( s => s === "WEEKOFF_PRESENT").length;
+  setKpi({ present, leave, wfh, weekoffPresent});
     } catch (err) {
       console.log("YEAR LOAD FAILED", err);
     }
@@ -189,6 +191,18 @@ export default function AttendanceEmployee() {
       return () => clearTimeout(t);
     }
   }, [error]);
+
+  useEffect(() => {
+  const loadHolidays = async () => {
+    const res = await api.get("/holidays");
+   setHolidaysList(res.data.holidays.map(h => ({
+   date: h.date.split("T")[0],
+   title: h.title
+   })));
+  };
+  loadHolidays();
+}, []);
+
   useEffect(()=>{
   const loadWeekOff = async ()=>{
       const r = await api.get("/weekly-off/me");
@@ -222,11 +236,39 @@ const todayIso = toISODate(new Date());
 const todayLog = fullData.logs.find((x) => x.date === todayIso);
 if (todayLog?.status === "PRESENT") newCal[todayIso] = "PRESENT";
 
+// ⭐ If WeekOff day + Check-In exists → Show PRESENT instead of ABSENT
+// ⭐ If WeekOff day + Check-In exists → Show PRESENT or WEEKOFF in UI
+if (weekOff) {
+  Object.keys(newCal).forEach(date => {
+    const dayName = new Date(date).toLocaleDateString("en-US",{weekday:"long"});
+
+    const isWeekOffDate =
+      (weekOff.isFixed && weekOff.offDay === dayName) ||
+      (!weekOff.isFixed && toISODate(weekOff.offDate) === date); // <-- FIX
+
+    const log = fullData.logs.find(l => l.date === date);
+
+if (isWeekOffDate) {
+  if (log?.status === "WEEKOFF_PRESENT") {
+    newCal[date] = "WEEKOFF_PRESENT";
+  } else {
+    newCal[date] = "WEEKOFF";
+  }
+}
+  });
+}
+
       /* ⭐ KPI CALCULATION FOR FILTER RANGE */
-      const present = Object.values(newCal).filter((s) => s === "PRESENT").length;
-      const leave = Object.values(newCal).filter((s) => s === "LEAVE").length;
-      const wfh = Object.values(newCal).filter((s) => s === "WFH").length;
-      setKpi({ present, leave, wfh });
+const present = Object.values(newCal).filter(
+  s => s === "PRESENT" || s === "LATE"
+).length;
+const leave = Object.values(newCal).filter(
+  s => s === "LEAVE" || s === "HALF_DAY"
+).length;
+const wfh = Object.values(newCal).filter(s => s === "WFH").length;
+const weekoffPresent = Object.values(newCal)
+  .filter(s => s === "WEEKOFF_PRESENT").length;
+setKpi({ present, leave, wfh, weekoffPresent });
 
       setCalendar(newCal);
       setDailyLogs([...newLogs].reverse());
@@ -234,7 +276,7 @@ if (todayLog?.status === "PRESENT") newCal[todayIso] = "PRESENT";
       setLoading(false);
     }
   },
-  [fullData]
+  [fullData , weekOff]
 );
 
   useEffect(() => {
@@ -257,19 +299,20 @@ const checkIn = async () => {
 };
 
   /* CHECK-OUT */
-  const checkOut = async () => {
-    try {
-      await api.post("/attendance/checkout");
-      await loadFullYear();
-      loadAttendance(filters);
+const checkOut = async () => {
+  try {
+    await api.post("/attendance/checkout");
 
-      setCheckOutSuccess(true);
-      setTimeout(() => setCheckOutSuccess(false), 1000);
+    await refreshUser();        // ⭐ COMP-OFF BALANCE UPDATE
+    await loadFullYear();
+    loadAttendance(filters);
 
-    } catch {
-      setError("Check-out failed");
-    }
-  };
+    setCheckOutSuccess(true);
+    setTimeout(() => setCheckOutSuccess(false), 1000);
+  } catch {
+    setError("Check-out failed");
+  }
+};
 
   /* EXPORT */
   const exportFile = async (format = "csv") => {
@@ -298,20 +341,40 @@ const checkIn = async () => {
   }, [filters]);
 
   /* CALENDAR DAYS */
-  const calendarDays = useMemo(() => {
-    return iterateDatesInclusive(filters.start, filters.end).map((d) => {
-      const iso = toISODate(d);
-      
-   // check this date is weekoff ?
-  const isWeekOff = weekOff && (
-     (weekOff.isFixed && weekOff.offDay === d.toLocaleDateString('en-US',{weekday:'long'})) ||
-     (!weekOff.isFixed && weekOff.offDate === iso)
-   );
-      return { iso, day: d.getDate(), status: calendar[iso] || "ABSENT" ,
-      isWeekOff
-      };
-    });
-  }, [filters, calendar, weekOff]);
+const calendarDays = useMemo(() => {
+  return iterateDatesInclusive(filters.start, filters.end).map((d) => {
+    const iso = toISODate(d);
+    const holiday = holidaysList.find(h => h.date === iso);
+    const isHoliday = !!holiday;
+    const holidayName = holiday?.title || null;
+
+    const status = calendar[iso] || "ABSENT";
+
+    // ⭐ WeekOff Logic FIXED (Correct Day Match)
+    const dayName = d.toLocaleDateString("en-US",{weekday:"long"});
+    const isWeekOff = weekOff && (
+      (weekOff.isFixed && weekOff.offDay === dayName) ||
+      (!weekOff.isFixed && toISODate(weekOff.offDate) === iso)
+    );
+
+    // ⭐ WeekOff + Holiday Combined Rule
+    const isOverlap = isHoliday && isWeekOff;
+
+    return { 
+      iso,
+      day: d.getDate(),
+status: isOverlap ? "HOLIDAY_WEEKOFF"
+ : isHoliday ? "HOLIDAY"
+ : status === "WEEKOFF_PRESENT" ? "WEEKOFF_PRESENT"
+ : isWeekOff ? "WEEKOFF"
+ : status,     
+      isWeekOff,
+      isHoliday,
+      isOverlap,
+      holidayName
+    };
+  });
+}, [filters, calendar, weekOff, holidaysList]);
 
   /* MONTH MATRIX FOR YEAR */
   const yearMonths = useMemo(() => {
@@ -439,22 +502,24 @@ return (
             Total WFH
           </div>
         </div>
-
-      {/* Assigned WeekOff */}
 {/* Assigned WeekOff */}
 <div className="p-5 rounded-2xl shadow-xl bg-white dark:bg-gray-900 border dark:border-[#2a2c33]">
   <div className="text-xl font-bold text-yellow-600 dark:text-yellow-400">
-    {weekOff 
-      ? weekOff.isFixed 
-        ? weekOff.offDay               // Weekly fixed off like "Saturday"
-        : `${weekOff.offDate}`         // Specific dates off
-      : "Not Assigned"}
+    {weekOff  ? weekOff.isFixed  ? weekOff.offDay : `${weekOff.offDate}`  : "Not Assigned"}
   </div>
   <div className="text-sm text-gray-600 dark:text-gray-300">
     Assigned WeekOff
   </div>
 </div>
-
+{/*WeekOff Present*/}
+        <div className="p-5 rounded-2xl shadow-xl bg-white dark:bg-gray-900 border dark:border-[#2a2c33]">
+          <div className="text-xl font-bold text-blue-600 dark:text-blue-400">
+            {kpi.weekoffPresent}
+          </div>
+          <div className="text-sm text-gray-600 dark:text-gray-300">
+            Total WeekOff Present
+          </div>
+        </div>
       </div>
 
       {/* QUICK ACTIONS */}
@@ -471,7 +536,6 @@ return (
 >
  {checkInSuccess ? "✔" : "Check-in"}
 </button>
-
 <button
   onClick={checkOut}
   className="flex-1 px-6 py-3 bg-red-600 hover:bg-red-700 text-white rounded-xl font-semibold shadow flex items-center justify-center gap-2"
@@ -517,83 +581,157 @@ return (
                     </div>
                   ))}
                 </div>
+                
+<div className="grid grid-cols-7 gap-1">
+  {m.weeks.flat().map((cell, idx) =>
+    !cell ? (
+      <div key={idx} className="h-8 sm:h-10"></div>
+    ) : (
+      (() => {
+        const iso = cell.iso;
+        const holiday = holidaysList.find(h => h.date === iso);
+        const isHoliday = !!holiday;
+        const holidayName = holiday?.title;
 
-                <div className="grid grid-cols-7 gap-1">
-                  {m.weeks.flat().map((cell, idx) =>
-                    !cell ? (
-                      <div key={idx} className="h-8 sm:h-10"></div>
-                    ) : (
-                      <div
-                        key={cell.iso}
-                        className={`h-10 sm:h-12 rounded-md flex flex-col items-center justify-center text-xs font-medium 
-                        ${
-                          cell.status === "PRESENT"
-                            ? "bg-green-100 text-green-700 dark:bg-green-800 dark:text-green-200"
-                          : cell.status === "WFH"
-                            ? "bg-blue-100 text-blue-700 dark:bg-blue-800 dark:text-blue-200"
-                          : cell.status === "LEAVE"
-                            ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-700 dark:text-yellow-200"
-                            : "bg-red-100 text-red-700 dark:bg-red-800 dark:text-red-200"
-                        }`}
-                      >
-                        <div className="font-bold">{cell.day}</div>
-                        <div>{cell.status.slice(0, 3)}</div>
-                      </div>
-                    )
-                  )}
-                </div>
+        const status = calendar[iso] || "ABSENT";
+
+        // ⭐ WeekOff logic same for year
+        const d = new Date(iso);
+        const dayName = d.toLocaleDateString('en-US',{weekday:'long'});
+        const isWeekOff = weekOff && (
+          (weekOff.isFixed && weekOff.offDay === dayName) ||
+          (!weekOff.isFixed && weekOff.offDate === iso)
+        );
+        /* 🟣 SPECIAL CASE: Holiday + WeekOff */
+        const isOverlap = isHoliday && isWeekOff;
+        return (
+          <div
+            key={iso}
+  className={`h-12 sm:h-14 rounded-md flex flex-col items-center justify-center 
+  text-[8px] sm:text-[9px] font-medium overflow-hidden text-center px-1 leading-tight
+
+              ${isOverlap
+                ? "bg-purple-300 text-black font-bold dark:bg-purple-700 dark:text-white"   // ⭐ overlap UI
+                : isHoliday
+                ? "bg-yellow-300 text-black font-bold dark:bg-yellow-600"
+                : status === "WEEKOFF_PRESENT"
+                ? "bg-gray-300 dark:bg-gray-600 text-black dark:text-white"
+              : isWeekOff
+                ? "bg-orange-200 text-black dark:bg-orange-600"
+              : status === "PRESENT"
+                ? "bg-green-100 text-green-700 dark:bg-green-800 dark:text-green-200"
+              : status === "WFH"
+                ? "bg-blue-100 text-blue-700 dark:bg-blue-800 dark:text-blue-200"
+              : status === "LEAVE"
+                ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-700 dark:text-yellow-200"
+              : "bg-red-100 text-red-700 dark:bg-red-800 dark:text-red-200"
+            }`}
+          >
+            <div className="font-bold">{cell.day}</div>
+
+            {/* 📌 Show only holiday name even if weekoff + holiday */}
+{isHoliday ? (
+  <div className="text-[7px] sm:text-[8px] leading-none font-bold truncate w-full text-center">
+    {holidayName}
+  </div>
+) : isWeekOff ? (
+  <div className="text-[7px] leading-none truncate w-full text-center">WeekOff</div>
+) : (
+  <div className="truncate w-full">{status.slice(0,3)}</div>
+)}
+
+          </div>
+        );
+      })()
+    )
+  )}
+</div>
+
               </div>
             ))}
-
           </div>
         ) : (
-          /* NORMAL VIEW */
-          <div>
+/* NORMAL VIEW */
+(
+<div>
 
-            <div className="grid grid-cols-7 gap-2 mb-4">
-              {WEEKDAYS.map((w) => (
-                <div key={w} className="text-center font-bold text-gray-700 dark:text-gray-300 text-xs sm:text-sm">
-                  {w}
-                </div>
-              ))}
-            </div>
+  {/* Weekday headers */}
+  <div className="grid grid-cols-7 gap-2 mb-4">
+    {WEEKDAYS.map(w => (
+      <div key={w} className="text-center font-bold text-gray-700 dark:text-gray-300 text-xs sm:text-sm">
+        {w}
+      </div>
+    ))}
+  </div>
 
-            <div className="grid grid-cols-7 gap-2 sm:gap-3">
-              {calendarDays.map((d) => (
-                <div
-                  key={d.iso}
-                  className={`p-3 sm:p-4 rounded-xl text-center shadow border 
-                  dark:border-[#2a2c33] dark:bg-gray-800 transition 
-                  ${d.isWeekOff 
-                  ? "bg-yellow-300 text-yellow-900 dark:bg-yellow-600 dark:text-black font-bold"       
-                    : d.status === "PRESENT"
-                      ? "bg-green-100 text-green-700 dark:bg-green-800 dark:text-green-200"
-                    : d.status === "WFH"
-                      ? "bg-blue-100 text-blue-700 dark:bg-blue-800 dark:text-blue-200"
-                    : d.status === "LEAVE"
-                      ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-700 dark:text-yellow-200"
-                    : "bg-red-100 text-red-700 dark:bg-red-800 dark:text-red-200"
-                  }`}
-                >
-                  <div className="text-lg sm:text-2xl font-bold">{d.day}</div>
-<div className="text-center leading-tight font-semibold min-h-[20px]">
+  {/* Month View / Week View both auto-align using filters.start */}
+  <div className="grid grid-cols-7 gap-2 sm:gap-3">
+  {(() => {
+  const s = new Date(filters.start);
+  const e = new Date(filters.end);
+  const diff = (e - s) / (1000*60*60*24);
 
-  {/* Mobile → sirf first letter */}
-  <span className="block sm:hidden text-[8px]">
-    {d.status.charAt(0)}
-  </span>
-
-  {/* Desktop → full text */}
-  <span className="hidden sm:block text-[12px]">
-    {d.status}
-  </span>
-
-</div>
-                </div>
-              ))}
-            </div>
+  // ------------------ 🔥 Week View ------------------
+  if(diff <= 7) {
+    return calendarDays.map((d) => (
+      <div
+        key={d.iso}
+        className={`p-3 sm:p-4 rounded-xl text-center shadow border dark:border-[#2a2c33]
+        ${d.isOverlap ? "bg-purple-300 dark:bg-purple-700 dark:text-white"
+        : d.isHoliday ? "bg-yellow-300 dark:bg-yellow-600 text-black font-bold"
+        : d.status === "WEEKOFF_PRESENT" ? "bg-gray-300 dark:bg-gray-600 text-black dark:text-white"
+        : d.isWeekOff ? "bg-orange-300 dark:bg-orange-600 text-black font-bold"
+        : d.status === "PRESENT" ? "bg-green-100 dark:bg-green-800 dark:text-green-200"
+        : d.status === "WFH" ? "bg-blue-100 dark:bg-blue-800 dark:text-blue-200"
+        : d.status === "LEAVE" ? "bg-yellow-200 dark:bg-yellow-700"
+        : "bg-red-100 dark:bg-red-800 dark:text-red-200"
+        }`}>
+          <div className="text-lg sm:text-2xl font-bold">{d.day}</div>
+          <div className="text-[10px] font-semibold leading-tight">
+            {d.isHoliday ? d.holidayName : d.isWeekOff ? "WeekOff" : d.status}
           </div>
-        )}
+      </div>
+    ));
+  }
+  // ------------------ 🔥 Month View ------------------
+  const base = new Date(filters.start);
+  const year = base.getFullYear();
+  const month = base.getMonth();
+  const matrix = monthMatrix(year, month);
+
+  return matrix.flat().map((cell, idx) => {
+    if(!cell) return <div key={idx} className="h-12 sm:h-16"></div>;
+
+    const iso = toISODate(cell);
+    const d = calendarDays.find(x => x.iso === iso);
+
+    if(!d) return <div key={iso} className="h-12 sm:h-16 opacity-20"></div>;
+
+    return (
+      <div
+        key={iso}
+        className={`p-3 sm:p-4 rounded-xl text-center shadow border dark:border-[#2a2c33]
+        ${d.isOverlap ? "bg-purple-300 dark:bg-purple-700 dark:text-white"
+        : d.isHoliday ? "bg-yellow-300 dark:bg-yellow-600 text-black font-bold"
+        : d.status === "WEEKOFF_PRESENT" ? "bg-gray-300 dark:bg-gray-600 text-black dark:text-white"
+        : d.isWeekOff ? "bg-orange-300 dark:bg-orange-600 text-black font-bold"
+        : d.status === "PRESENT" ? "bg-green-100 dark:bg-green-800 dark:text-green-200"
+        : d.status === "WFH" ? "bg-blue-100 dark:bg-blue-800 dark:text-blue-200"
+        : d.status === "LEAVE" ? "bg-yellow-200 dark:bg-yellow-700"
+        : "bg-red-100 dark:bg-red-800 dark:text-red-200"
+      }`}>
+        <div className="text-lg sm:text-2xl font-bold">{d.day}</div>
+        <div className="text-[10px] font-semibold leading-tight">
+          {d.isHoliday ? d.holidayName : d.isWeekOff ? "WeekOff" : d.status}
+        </div>
+      </div>
+    );
+  });
+})()}
+  </div>
+</div>
+)
+)}
       </div>
 
       {/* DAILY LOGS */}
@@ -609,30 +747,22 @@ return (
               type="date"
               value={logFilter.start}
               max={logFilter.end || undefined}
-              onChange={(e) => {
-                setLogFilter((p) => ({ ...p, start: e.target.value }));
-                setPage(1);
-              }}
+              onChange={(e) => {setLogFilter((p) => ({ ...p, start: e.target.value }));setPage(1);}}
               className="px-2 py-1 text-sm rounded-lg border dark:border-[#2a2c33] dark:bg-gray-800 dark:text-white"
             />
-
             <span className="dark:text-gray-300">→</span>
-
             <input
               type="date"
               value={logFilter.end}
               min={logFilter.start || undefined}
-              onChange={(e) =>
-                setLogFilter((p) => ({ ...p, end: e.target.value }))
+              onChange={(e) => setLogFilter((p) => ({ ...p, end: e.target.value }))
               }
               className="px-2 py-1 text-sm rounded-lg border dark:border-[#2a2c33] dark:bg-gray-800 dark:text-white"
             />
 
             {(logFilter.start || logFilter.end) && (
               <button
-                onClick={() => {
-                  setLogFilter({ start: "", end: "" });
-                  setPage(1);
+                onClick={() => {setLogFilter({ start: "", end: "" }); setPage(1);
                 }}
                 className="px-3 py-1 bg-red-500 text-white rounded-lg text-xs"
               >
@@ -652,53 +782,57 @@ return (
           <p className="text-center text-gray-500 dark:text-gray-400">No logs found</p>
         ) : (
           <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1">
+{paginatedLogs.map((log) => (
+  <div
+    key={log.id}
+    className="p-3 rounded-xl border shadow bg-white dark:bg-gray-800 
+    dark:border-[#2a2c33] flex flex-col sm:flex-row justify-between items-center gap-3"
+  >
+    {/* LEFT SIDE */}
+    <div>
+      <div className="font-bold text-sm sm:text-base dark:text-white">
+        {log.date}
+      </div>
 
-            {paginatedLogs.map((log) => (
-              <div
-                key={log.id}
-                className="p-4 rounded-xl border shadow 
-                bg-white dark:bg-gray-800 dark:border-[#2a2c33]
-                flex flex-col sm:flex-row justify-between gap-3"
-              >
-                <div>
-                  <div className="font-bold text-sm sm:text-base dark:text-white">
-                    {log.date}
-                  </div>
+      <div className="flex flex-wrap gap-3 mt-1 text-xs sm:text-sm dark:text-gray-300">
+        <span
+          className={`px-2 py-1 rounded-full text-xs font-bold 
+          ${
+            log.status === "WEEKOFF_PRESENT"
+              ? "bg-gray-300 text-black dark:bg-gray-600 dark:text-white"
+              : log.status === "PRESENT"
+              ? "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-200"
+              : log.status === "WFH"
+              ? "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-200"
+              : log.status === "LEAVE"
+              ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-800 dark:text-yellow-200"
+              : "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-200"
+          }`}
+        >
+          {log.status}
+        </span>
 
-                  <div className="flex flex-wrap gap-3 mt-1 text-xs sm:text-sm dark:text-gray-300">
-                    <span
-                      className={`px-3 py-1 rounded-full text-xs font-bold 
-                      ${
-                        log.status === "PRESENT"
-                          ? "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-200"
-                        : log.status === "WFH"
-                          ? "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-200"
-                        : log.status === "LEAVE"
-                          ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-800 dark:text-yellow-200"
-                        : "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-200"
-                      }`}
-                    >
-                      {log.status}
-                    </span>
+        <span><b>In:</b> {formatTime(log.checkIn)}</span>
+        {log.checkOut && (
+          <span><b>Out:</b> {formatTime(log.checkOut)}</span>
+        )}
+      </div>
+    </div>
 
-                    <span><b>In:</b> {formatTime(log.checkIn)}</span>
+    {/* RIGHT SIDE — TOTAL HOURS */}
+    <div className="text-right">
+      <div className="text-lg sm:text-xl font-bold text-indigo-600 dark:text-indigo-400">
+        {["WEEKOFF", "LEAVE", "ABSENT"].includes(log.status)
+          ? "—"
+          : `${parseHours(log.checkIn, log.checkOut)}h`}
+      </div>
+      <div className="text-xs text-gray-500 dark:text-gray-400">
+        Total Hours
+      </div>
+    </div>
+  </div>
+))}
 
-                    {log.checkOut && (
-                      <span><b>Out:</b> {formatTime(log.checkOut)}</span>
-                    )}
-                  </div>
-                </div>
-
-                <div className="sm:text-right flex sm:block justify-between">
-                  <div className="text-lg sm:text-xl font-bold text-indigo-600 dark:text-indigo-400">
-                    {parseHours(log.checkIn, log.checkOut)}h
-                  </div>
-                  <div className="text-xs text-gray-500 dark:text-gray-400">
-                    Total Hours
-                  </div>
-                </div>
-              </div>
-            ))}
           </div>
         )}
 
@@ -712,7 +846,6 @@ return (
             >
               ⬅ Previous
             </button>
-
             <button
               disabled={page === totalPages}
               onClick={() => setPage((p) => p + 1)}
@@ -720,8 +853,7 @@ return (
             >
               Next ➜
             </button>
-          </div>
-        )}
+          </div> )}
       </div>
 
       {/* ERROR POPUP */}
@@ -732,9 +864,7 @@ return (
           </div>
         </div>
       )}
-
     </div>
-  </div>
-);
+  </div>);
 };
 // ========================= END PART 2 ===========================

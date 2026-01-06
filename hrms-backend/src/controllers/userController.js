@@ -16,7 +16,7 @@ export const getMe = async (req, res) => {
         firstName: true,
         lastName: true,
         role: true,
-
+        compOffBalance: true,
         // 🔴 legacy (keep)
         departmentId: true,
 

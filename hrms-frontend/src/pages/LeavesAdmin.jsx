@@ -78,7 +78,12 @@ function LeaveItem({ l, updateStatus, deleteLeave, openRejectPopup,approveLoadin
             <b>Reason:</b> {l.reason}
           </div>
         )}
-
+{l.responsiblePerson && (
+  <div className="text-xs text-gray-500 mt-1">
+    <b>Responsibility Given To:</b>{" "}
+    {l.responsiblePerson.firstName} {l.responsiblePerson.lastName}
+  </div>
+)}
         {/* SHOW REJECT REASON IF LEAVE IS REJECTED */}
         {l.status === "REJECTED" && l.rejectReason && (
           <div className="text-xs text-red-500 mt-1">
@@ -254,6 +259,7 @@ const submitReject = async (reason) => {
   // DELETE - Now shows backend custom message
   const confirmDelete = async () => {
     try {
+      setDeleteLoadingId(deleteId);  
       const response = await api.delete(`/leaves/${deleteId}`);
       
       // ✨ Use backend message if available
@@ -268,7 +274,9 @@ const submitReject = async (reason) => {
     } catch (err) {
       setMsg(err?.response?.data?.message || "Failed to delete leave");
       setMsgType("error");
-    }
+    }finally {
+     setDeleteLoadingId(null); 
+  }
   };
 
   return (

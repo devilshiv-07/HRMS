@@ -36,10 +36,13 @@ model User {
   leaveApprovals         LeaveApproval[]
   reimbursementApprovals ReimbursementApproval[]
 
-  // 🔥 Resignation relation added
+  //  Resignation relation added
   resignations Resignation[]
 
-  /// 🔥 CompOff balance and relation
+  //  reverse relation
+  responsibleForLeaves Leave[] @relation("LeaveResponsible")
+
+  ///  CompOff balance and relation
   compOffBalance Float       @default(0) // supports 0.5 half-day
   compOffs       CompOff[]
   weeklyOffs     WeeklyOff[]
@@ -132,12 +135,21 @@ model Leave {
   reason       String?
   status       String    @default("PENDING")
   approverId   String?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
   rejectReason String?
-  approver     User?     @relation("LeaveApprover", fields: [approverId], references: [id])
-  user         User      @relation(fields: [userId], references: [id])
 
+  // ✅ RESPONSIBLE PERSON (SAFE SYNTAX)
+  responsiblePersonId String?
+  responsiblePerson   User?   @relation("LeaveResponsible", fields: [responsiblePersonId], references: [id])
+
+  // ✅ ADD THESE (SOFT DELETE)
+  isAdminDeleted    Boolean @default(false)
+  isEmployeeDeleted Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  approver  User?           @relation("LeaveApprover", fields: [approverId], references: [id])
+  user      User            @relation(fields: [userId], references: [id])
   approvals LeaveApproval[]
 
   @@index([userId, startDate, endDate])
@@ -261,6 +273,16 @@ model LeaveApproval {
   manager User  @relation(fields: [managerId], references: [id])
 
   @@unique([leaveId, managerId]) // 1 manager = 1 decision per leave
+}
+
+/// ===================== HOLIDAY =====================
+model Holiday {
+  id          String   @id @default(uuid())
+  title       String
+  date        DateTime @unique
+  day         String
+  description String?
+  createdAt   DateTime @default(now())
 }
 
 model ReimbursementApproval {

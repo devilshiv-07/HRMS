@@ -110,7 +110,7 @@ export default function WeeklyOff() {
         <button
           onClick={submit}
           disabled={loading}
-          className="w-full p-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-blue-400"
+          className="w-full p-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:bg-indigo-400"
         >
           {loading ? "Saving..." : "Assign Weekly Off"}
         </button>
@@ -141,7 +141,7 @@ export default function WeeklyOff() {
                 <td className="p-3">{i.offDate?.slice(0,10) || "-"}</td>
                 <td className="p-3 text-center">{i.isFixed?"Yes":"No"}</td>
                 <td className="p-3 flex gap-3 justify-center">
-                  <button onClick={()=>setEdit(i)} className="text-blue-500 hover:text-blue-700">
+                  <button onClick={()=>setEdit(i)} className="text-indigo-500 hover:text-indigo-700">
                     <FiEdit2 size={18}/>
                   </button>
                   <button onClick={()=>remove(i.id)} className="text-red-500 hover:text-red-700">
@@ -192,7 +192,7 @@ export default function WeeklyOff() {
                 Cancel
               </button>
               <button onClick={update}
-                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
+                className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700">
                 Save
               </button>
             </div>

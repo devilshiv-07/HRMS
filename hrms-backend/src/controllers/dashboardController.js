@@ -1,4 +1,8 @@
 import prisma from "../prismaClient.js";
+import {
+  countActiveEmployees,
+  findActiveEmployees
+} from "../services/userService.js";
 
 /* =====================================================
    Helper: Today Range (00:00 → 23:59)
@@ -24,9 +28,7 @@ export const dashboard = async (req, res) => {
        🔥 ADMIN DASHBOARD (UNCHANGED)
     ====================================================== */
    if (user.role === "ADMIN") {
-  const totalEmployees = await prisma.user.count({
-    where: { role: { in: ["AGILITY_EMPLOYEE", "LYF_EMPLOYEE"] } }
-  });
+  const totalEmployees = await countActiveEmployees();
 
   const totalDepartments = await prisma.department.count();
 
@@ -55,22 +57,30 @@ export const dashboard = async (req, res) => {
     orderBy: { name: "asc" }
   });
 
-  const deptStats = deptStatsRaw.map((d) => {
-    // 🔑 Unique users (members + managers)
-    const userSet = new Set();
+const deptStats = await Promise.all(
+  deptStatsRaw.map(async (d) => {
+    const userIds = new Set();
 
-    d.members.forEach((m) => userSet.add(m.userId));
-    d.managers.forEach((m) => userSet.add(m.id));
+    d.members.forEach((m) => userIds.add(m.userId));
+    d.managers.forEach((m) => userIds.add(m.id));
+
+    const activeCount = await prisma.user.count({
+      where: {
+        id: { in: Array.from(userIds) },
+        isActive: true
+      }
+    });
 
     return {
       id: d.id,
       name: d.name,
-      count: userSet.size, // ✅ FINAL CORRECT COUNT
+      count: activeCount, // ✅ ONLY ACTIVE
       managers: d.managers.map(
         (m) => `${m.firstName} ${m.lastName || ""}`.trim()
       )
     };
-  });
+  })
+);
   /* =========================================================================== */
 
   const { start, end } = getTodayRange();
@@ -82,20 +92,23 @@ export const dashboard = async (req, res) => {
 
   const presentToday = todayAttendance.filter((a) => a.checkIn).length;
   const wfhToday = todayAttendance.filter((a) => a.status === "WFH").length;
-  const absentToday = totalEmployees - (presentToday + wfhToday);
+const absentToday = Math.max(
+  totalEmployees - (presentToday + wfhToday),//+ weekoffpresent+leave+compOff+weakOff
+  0
+);
 
   const leaveSummary = await prisma.leave.groupBy({
     by: ["status"],
     _count: { id: true }
   });
 
-  const agilityEmployees = await prisma.user.count({
-    where: { role: "AGILITY_EMPLOYEE" }
-  });
+const agilityEmployees = await countActiveEmployees({
+  role: "AGILITY_EMPLOYEE"
+});
 
-  const lyfEmployees = await prisma.user.count({
-    where: { role: "LYF_EMPLOYEE" }
-  });
+const lyfEmployees = await countActiveEmployees({
+  role: "LYF_EMPLOYEE"
+});
 
   const payrollLast = await prisma.payroll.findMany({
     orderBy: { salaryMonth: "desc" },

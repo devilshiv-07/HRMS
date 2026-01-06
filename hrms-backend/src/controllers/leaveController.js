@@ -3,7 +3,7 @@ import { sendRequestNotificationMail } from "../utils/sendMail.js";
 import { getAdminAndManagers } from "../utils/getApprovers.js";
 
 const isHalfDay = (type) => type === "HALF_DAY";
-
+const getDayName = (d) => new Date(d).toLocaleDateString("en-US",{weekday:"long"});
 /* ================= HELPERS ================= */
 const getLeaveTypeName = (type) => {
   const typeNames = {
@@ -22,7 +22,7 @@ const getLeaveTypeName = (type) => {
 -------------------------------------------------------- */
 export const createLeave = async (req, res) => {
   try {
-    const { type, startDate, endDate, reason } = req.body;
+   const { type, startDate, endDate, reason, responsiblePerson } = req.body;
 
     if (!type || !startDate || !endDate) {
       return res.status(400).json({ success: false, message: "Missing fields" });
@@ -40,15 +40,70 @@ export const createLeave = async (req, res) => {
     if (isHalfDay(type) && startDate !== endDate) {
       return res.status(400).json({ success: false, message: "Half Day must be for a single date" });
     }
+// ================== HOLIDAY CHECK ==================
+const holidays = await prisma.holiday.findMany({
+  where:{
+    date:{ gte:new Date(startDate), lte:new Date(endDate) }
+  }
+});
 
+if(holidays.length>0){
+  return res.status(400).json({
+    success:false,
+    message:`Cannot apply leave on holiday (${holidays[0].title})`
+  });
+}
+
+// ================== WEEKOFF CHECK ==================
+const weekOff = await prisma.weeklyOff.findFirst({ where:{ userId:req.user.id } });
+
+if(weekOff){
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  let cur = new Date(start);
+
+  while(cur<=end){
+    const iso = cur.toISOString().split("T")[0];
+    const dayName = getDayName(cur);
+
+    const isFixed = weekOff.isFixed && weekOff.offDay===dayName;
+    const isSpecial = !weekOff.isFixed && weekOff.offDate===iso;
+
+    if(isFixed || isSpecial){
+      return res.status(400).json({
+        success:false,
+        message:`Cannot apply leave on Weekly Off (${dayName})`
+      });
+    }
+    cur.setDate(cur.getDate()+1);
+  }
+}
     const requestStart = new Date(startDate);
     const requestEnd = new Date(endDate);
+    // 🔥 RULE: 3+ DAYS LEAVE → REASON COMPULSORY
+const diffDays =
+  Math.floor((requestEnd - requestStart) / (1000 * 60 * 60 * 24)) + 1;
+
+if (diffDays >= 3 && !reason?.trim()) {
+  return res.status(400).json({
+    success: false,
+    message: "Reason is mandatory for leave of 3 days or more",
+  });
+}
+// 🔥 RULE: WFH → reason compulsory (any duration)
+if (type === "WFH" && !reason?.trim()) {
+  return res.status(400).json({
+    success: false,
+    message: "Reason is mandatory for Work From Home",
+  });
+}
 
     // Prevent overlapping leave
     const overlappingLeaves = await prisma.leave.findMany({
       where: {
         userId: req.user.id,
         status: { in: ["PENDING", "APPROVED"] },
+        isAdminDeleted: false, isEmployeeDeleted: false,
         AND: [{ startDate:{lte:requestEnd} },{ endDate:{gte:requestStart} }]
       }
     });
@@ -71,7 +126,23 @@ export const createLeave = async (req, res) => {
     const managers = employee.departments.flatMap(d=>d.department.managers);
     if(managers.length===0)
       return res.status(400).json({ success:false,message:"No manager assigned" });
+    // 🔐 Responsible Person Validation
 
+let responsiblePersonId = null;
+
+if (responsiblePerson) {
+  const userExists = await prisma.user.findUnique({
+    where: { id: responsiblePerson }
+  });
+
+  if (!userExists) {
+    return res.status(400).json({
+      success: false,
+      message: "Selected responsible person is invalid"
+    });
+  }
+  responsiblePersonId = responsiblePerson;
+}
     /* Create leave */
     const leave = await prisma.leave.create({
       data:{
@@ -80,9 +151,10 @@ export const createLeave = async (req, res) => {
         startDate:requestStart,
         endDate:requestEnd,
         reason: reason||"",
-        status:"PENDING"
+        status:"PENDING",
+        responsiblePersonId
       },
-      include:{ user:true }   // <-- IMPORTANT FIX (mail needs name)
+      include:{ user:true , responsiblePerson: true   }  // <-- IMPORTANT FIX (mail needs name)
     });
 
     /* Create approvals */
@@ -125,14 +197,24 @@ export const createLeave = async (req, res) => {
 export const listLeaves = async (req, res) => {
   try {
     const where =
-      req.user.role === "ADMIN" ? {} : { userId: req.user.id };
+  req.user.role === "ADMIN"
+    ? { isAdminDeleted: false }
+    : { userId: req.user.id, isEmployeeDeleted: false };
 
     const leaves = await prisma.leave.findMany({
       where,
-      include: {
-        user: true,
-        approver: true,
-      },
+    include: {
+  user: true,
+  approver: true,
+  responsiblePerson: {
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      email: true
+    }
+  }
+},
       orderBy: { createdAt: "desc" },
     });
 
@@ -152,11 +234,22 @@ export const getLeaveById = async (req, res) => {
 
     const leave = await prisma.leave.findUnique({
       where: { id },
-      include: { user: true, approver: true },
+      include: { user: true, approver: true,responsiblePerson: true },
     });
-
+    
     if (!leave)
       return res.status(404).json({ success: false, message: "Leave not found" });
+    
+if (
+  (req.user.role === "ADMIN" && leave.isAdminDeleted) ||
+  (req.user.role !== "ADMIN" && leave.isEmployeeDeleted)
+) {
+  return res.status(404).json({
+    success:false,
+    message:"Leave not found"
+  });
+}
+
 
     if (req.user.role !== "ADMIN" && leave.userId !== req.user.id) {
       return res.status(403).json({ success: false, message: "Access denied" });
@@ -197,13 +290,18 @@ export const updateLeave = async (req, res) => {
           message: "Cannot modify approved/rejected leave"
         });
 
-      delete input.status;
-      delete input.approverId;
-      delete input.userId;
-      delete input.rejectReason;
-    }
+delete input.status;
+delete input.approverId;
+delete input.userId;
+delete input.rejectReason;
 
-    // 🔥 HALF DAY VALIDATION (UPDATE)
+// 🔥 ALLOW ONLY THIS EXTRA FIELD
+if ("responsiblePerson" in input) {
+  input.responsiblePersonId = input.responsiblePerson || null;
+  delete input.responsiblePerson;
+}
+ }
+   // 🔥 HALF DAY VALIDATION (UPDATE)
     if (
       isHalfDay(input.type || leave.type) &&
       input.startDate &&
@@ -221,20 +319,64 @@ export const updateLeave = async (req, res) => {
       const requestStart = new Date(input.startDate || leave.startDate);
       const requestEnd = new Date(input.endDate || leave.endDate);
 
-      const overlappingLeaves = await prisma.leave.findMany({
-        where: {
-          userId: leave.userId,
-          status: "APPROVED",
-          id: { not: id }, // Exclude current leave
-          OR: [
-            {
-              AND: [
-                { startDate: { lte: requestEnd } },
-                { endDate: { gte: requestStart } }
-              ]
-            }
-          ]
-        }
+      if (input.startDate || input.endDate) {
+  const s = new Date(input.startDate || leave.startDate);
+  const e = new Date(input.endDate || leave.endDate);
+  const diff =
+    Math.floor((e - s) / (1000 * 60 * 60 * 24)) + 1;
+
+  if (diff >= 3 && !input.reason?.trim() && !leave.reason?.trim()) {
+    return res.status(400).json({
+      success: false,
+      message: "Reason is mandatory for leave of 3 days or more",
+    });
+  }
+  // 🔥 RULE: WFH → reason compulsory (update also)
+if (
+  (input.type || leave.type) === "WFH" &&
+  !input.reason?.trim() &&
+  !leave.reason?.trim()
+) {
+  return res.status(400).json({
+    success: false,
+    message: "Reason is mandatory for Work From Home",
+  });
+}
+
+}
+if ("responsiblePerson" in input) {
+  if (input.responsiblePerson) {
+    const userExists = await prisma.user.findUnique({
+      where: { id: input.responsiblePerson }
+    });
+
+    if (!userExists) {
+      return res.status(400).json({
+        success: false,
+        message: "Selected responsible person is invalid"
+      });
+    }
+
+    input.responsiblePersonId = input.responsiblePerson;
+  } else {
+    input.responsiblePersonId = null;
+  }
+
+  delete input.responsiblePerson;
+}
+
+const overlappingLeaves = await prisma.leave.findMany({
+where: {
+  userId: leave.userId,
+  status: "APPROVED",
+  id: { not: id },
+  isAdminDeleted: false,
+  isEmployeeDeleted: false,
+  AND: [
+    { startDate: { lte: requestEnd } },
+    { endDate: { gte: requestStart } }
+  ]
+}
       });
 
       if (overlappingLeaves.length > 0) {
@@ -252,6 +394,7 @@ export const updateLeave = async (req, res) => {
       include: {
         user: true,
         approver: true,
+        responsiblePerson: true
       }
     });
 
@@ -362,6 +505,8 @@ else {
           userId: leave.userId,
           status:"APPROVED",
           id:{not:leaveId},
+          isAdminDeleted: false,
+isEmployeeDeleted: false,
           AND:[
             {startDate:{lte:leave.endDate}},
             {endDate:{gte:leave.startDate}}
@@ -378,12 +523,12 @@ else {
     // Update final leave status in main table
     // =====================================================
     const updated = await prisma.leave.update({
-      where:{id:leaveId},
-      data:{ 
-        status:finalStatus,
-        rejectReason: finalStatus==="REJECTED" ? reason||"" : null
-      },
-      include:{ user:true }
+   where:{ id: leaveId },
+  data:{ 
+    status: finalStatus,
+    rejectReason: finalStatus==="REJECTED" ? reason||"" : null
+  },
+  include:{ user:true }
     });
 
     // =====================================================
@@ -427,32 +572,46 @@ export const deleteLeave = async (req, res) => {
     const leave = await prisma.leave.findUnique({ where: { id } });
 
     if (!leave)
-      return res.status(404).json({ success: false, message: "Leave not found" });
+      return res.status(404).json({ success:false, message:"Leave not found" });
 
+    // 👤 EMPLOYEE DELETE
     if (req.user.role !== "ADMIN") {
       if (leave.userId !== req.user.id)
-        return res.status(403).json({ success: false, message: "Access denied" });
+        return res.status(403).json({ success:false, message:"Access denied" });
 
       if (leave.status !== "PENDING")
         return res.status(400).json({
-          success: false,
-          message: "Only pending leaves can be deleted"
+          success:false,
+          message:"Only pending leaves can be deleted"
         });
+
+      await prisma.leave.update({
+        where: { id },
+        data: { isEmployeeDeleted: true }
+      });
+
+      return res.json({
+        success:true,
+        message:"Leave removed from your list"
+      });
     }
 
-    await prisma.leave.delete({ where: { id } });
-
-    // ✨ Custom success message
-    const leaveTypeName = getLeaveTypeName(leave.type);
-    const successMessage = `Your ${leaveTypeName} request has been deleted successfully`;
+    // 👑 ADMIN DELETE
+    await prisma.leave.update({
+      where: { id },
+      data: { isAdminDeleted: true }
+    });
 
     return res.json({
-      success: true,
-      message: successMessage
+      success:true,
+      message:"Leave removed from admin list"
     });
 
   } catch (error) {
     console.error("deleteLeave ERROR:", error);
-    return res.status(500).json({ success: false, message: "Internal server error" });
+    return res.status(500).json({
+      success:false,
+      message:"Internal server error"
+    });
   }
 };

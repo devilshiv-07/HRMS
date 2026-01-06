@@ -15,7 +15,8 @@ import Unauthorized from "./pages/Unauthorized";
 import EmployeeView from "./pages/EmployeeView";
 import Reimbursement from "./pages/Reimbursement.jsx";
 import Resignation from "./pages/Resignation.jsx";
-import WeeklyOff from "./pages/WeeklyOff";     // ✔ Real component name
+import WeeklyOff from "./pages/WeeklyOff";     
+import HolidayPage from "./pages/HolidayPage";   
 
 import useAuthStore from "./stores/authstore";
 import api from "./api/axios";
@@ -207,6 +208,17 @@ export default function App() {
         </ProtectedRoute>
         }
       />
+      {/* HOLIDAYS (ADMIN ONLY) */}
+<Route
+  path="/holidays"
+  element={
+    <ProtectedRoute allowedRoles={["ADMIN"]}>
+      <LayoutPremium>
+        <HolidayPage />
+      </LayoutPremium>
+    </ProtectedRoute>
+  }
+/>
 
       {/* CATCH-ALL */}
       <Route path="*" element={<Navigate to="/" replace />} />
