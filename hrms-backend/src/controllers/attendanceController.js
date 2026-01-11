@@ -30,12 +30,7 @@ function todayRange() {
 function toLocalISO(date) {
   const d = new Date(date);
   return (
-    d.getFullYear() +
-    "-" +
-    String(d.getMonth() + 1).padStart(2, "0") +
-    "-" +
-    String(d.getDate()).padStart(2, "0")
-  );
+    d.getFullYear() +  "-" +  String(d.getMonth() + 1).padStart(2, "0") +  "-" + String(d.getDate()).padStart(2, "0") );
 }
 // ================= Auto Grant Comp-Off on Weekly Off Work =================
 async function autoGrantCompOff(userId, workDate) {
@@ -52,13 +47,7 @@ async function autoGrantCompOff(userId, workDate) {
      1️⃣ CHECK WEEK-OFF (FIXED + ROSTER)
   ========================================= */
   const weeklyOff = await prisma.weeklyOff.findFirst({
-    where: {
-      userId,
-      OR: [
-        { isFixed: true, offDay: dayName },
-        { isFixed: false, offDate: dateObj }
-      ]
-    }
+    where: {userId, OR: [{ isFixed: true, offDay: dayName }, { isFixed: false, offDate: dateObj }  ] }
   });
 
   if (!weeklyOff) return; // ❌ not a week-off
@@ -67,11 +56,7 @@ async function autoGrantCompOff(userId, workDate) {
      2️⃣ PREVENT DUPLICATE COMP-OFF
   ========================================= */
   const alreadyGranted = await prisma.compOff.findFirst({
-    where: {
-      userId,
-      workDate: dateObj
-    }
-  });
+    where: { userId, workDate: dateObj } });
 
   if (alreadyGranted) return;
 
@@ -79,14 +64,7 @@ async function autoGrantCompOff(userId, workDate) {
      3️⃣ CREATE COMP-OFF ENTRY
   ========================================= */
   await prisma.compOff.create({
-    data: {
-      userId,
-      workDate: dateObj,
-      duration: 1,
-      status: "APPROVED",
-      approvedAt: new Date(),
-      note: "Worked on weekly off"
-    }
+    data: {userId, workDate: dateObj,  duration: 1, status: "APPROVED", approvedAt: new Date(), note: "Worked on weekly off" }
   });
 
   /* =========================================
@@ -102,9 +80,6 @@ async function autoGrantCompOff(userId, workDate) {
   console.log(`🎉 Comp-Off granted for ${isoDate}`);
 }
 
-/* =======================================================
-   CHECK-IN
-======================================================= */
 /* =======================================================
    CHECK-IN (Holiday + WeekOff BLOCK)
 ======================================================= */
@@ -200,7 +175,10 @@ if (leaveToday && !["WFH", "HALF_DAY"].includes(leaveToday.type)) {
     /* =====================================================
        5️⃣ FINAL STATUS (🔥 IMPORTANT PART)
     ===================================================== */
-let status;
+let status = "PRESENT";
+let lateHalfDayEligible = false;
+
+const halfDayCutoff = new Date(todayISO + "T12:00:00");
 
 if (isWeekOff) {
   status = "WEEKOFF_PRESENT";
@@ -212,9 +190,12 @@ else if (leaveToday?.type === "HALF_DAY") {
   status = "HALF_DAY";
 }
 else {
-  const lateTime = new Date();
-  lateTime.setHours(23, 0, 0, 0);
-  status = today > lateTime ? "LATE" : "PRESENT";
+  if (today >= halfDayCutoff) {
+    status = "HALF_DAY_PENDING";                 // still present
+    lateHalfDayEligible = true;         // 🔥 ADMIN DECISION PENDING
+  } else {
+    status = "PRESENT";
+  }
 }
 
     /* =====================================================
@@ -223,14 +204,14 @@ else {
     const attendance = existing
       ? await prisma.attendance.update({
           where: { id: existing.id },
-          data: { checkIn: today, status }
+          data: { checkIn: today, status, lateHalfDayEligible }
         })
       : await prisma.attendance.create({
           data: {
             userId: user.id,
             date: new Date(todayISO),
             checkIn: today,
-            status
+            status, lateHalfDayEligible
           }
         });
 
@@ -342,43 +323,39 @@ export const getMyAttendance = async (req, res) => {
       const iso = toLocalISO(cur);
 
       /* =========================
-         A️⃣ ATTENDANCE (TOP PRIORITY)
-      ========================= */
-      if (attendanceMap[iso]) {
-        const a = attendanceMap[iso];
-        dailyLogs.push({ ...a, date: iso });
-        calendar[iso] = a.status; // PRESENT / LATE / WFH / HALF_DAY / WEEKOFF_PRESENT
-        cur.setDate(cur.getDate() + 1);
-        continue;
-      }
-
-      /* =========================
-         B️⃣ LEAVE (WFH / HALF_DAY / OTHERS)
+      B️⃣ LEAVE (WFH / HALF_DAY / OTHERS)
       ========================= */
       const leave = leaves.find(
         l => new Date(l.startDate) <= cur && new Date(l.endDate) >= cur
       );
-
+      
       if (leave) {
         const status =
-          leave.type === "WFH"
-            ? "WFH"
-            : leave.type === "HALF_DAY"
-            ? "HALF_DAY"
-            : "LEAVE";
-
+        leave.type === "WFH" ? "WFH"
+        : leave.type === "HALF_DAY" ? "HALF_DAY"  : "LEAVE";
+        
         dailyLogs.push({
           date: iso,
           status,
           checkIn: null,
           checkOut: null
         });
-
+        
         calendar[iso] = status;
         cur.setDate(cur.getDate() + 1);
         continue;
       }
-
+      /* =========================
+         A️⃣ ATTENDANCE
+      ========================= */
+      
+      if (attendanceMap[iso]) {
+        const a = attendanceMap[iso];
+        dailyLogs.push({ ...a, date: iso });
+        calendar[iso] = a.lateHalfDayEligible ? "HALF_DAY_PENDING" : a.status; // PRESENT / LATE / WFH / HALF_DAY / WEEKOFF_PRESENT
+        cur.setDate(cur.getDate() + 1);
+        continue;
+      }
       /* =========================
          C️⃣ HOLIDAY
       ========================= */
@@ -505,26 +482,27 @@ export const getAllAttendance = async (req, res) => {
     /* =====================================================
        5️⃣ MAPS
     ===================================================== */
-    const attendanceMap = {};
-    attendances.forEach(a => {
-      const key = `${a.userId}_${toLocalISO(a.date)}`;
-      attendanceMap[key] = a;
-    });
-
+    
     const leaveMap = {};
     leaves.forEach(l => {
       let cur = new Date(l.startDate);
       cur.setHours(0, 0, 0, 0);
       const last = new Date(l.endDate);
       last.setHours(0, 0, 0, 0);
-
+      
       while (cur <= last) {
         const key = `${l.userId}_${toLocalISO(cur)}`;
         leaveMap[key] = l.type; // PAID / SICK / CASUAL / WFH / HALF_DAY / COMP_OFF
         cur.setDate(cur.getDate() + 1);
       }
     });
-
+    
+    const attendanceMap = {};
+    attendances.forEach(a => {
+      const key = `${a.userId}_${toLocalISO(a.date)}`;
+      attendanceMap[key] = a;
+    });
+    
     const rosterWeekOffMap = {};
     weeklyOffs.forEach(w => {
       if (!w.isFixed && w.offDate) {
@@ -545,13 +523,7 @@ export const getAllAttendance = async (req, res) => {
         const iso = toLocalISO(cur);
         const key = `${emp.id}_${iso}`;
 
-        /* A️⃣ ATTENDANCE (TOP PRIORITY) */
-        if (attendanceMap[key]) {
-          rows.push(attendanceMap[key]);
-          cur.setDate(cur.getDate() + 1);
-          continue;
-        }
-
+        
         /* B️⃣ LEAVE / WFH / HALF_DAY / COMP_OFF */
         if (leaveMap[key]) {
           rows.push({
@@ -566,6 +538,13 @@ export const getAllAttendance = async (req, res) => {
           continue;
         }
 
+        /* A️⃣ ATTENDANCE (TOP PRIORITY) */
+        if (attendanceMap[key]) {
+          rows.push(attendanceMap[key]);
+          cur.setDate(cur.getDate() + 1);
+          continue;
+        }
+        
         /* C️⃣ WEEK-OFF */
         const dayName = cur.toLocaleDateString("en-US", { weekday: "long" });
 
@@ -612,11 +591,15 @@ export const getAllAttendance = async (req, res) => {
 
     const compOffCount = finalRows.filter(r => r.status === "COMP_OFF").length;
 
-    const leaveCount = finalRows.filter(r =>
-      ["PAID", "UNPAID", "SICK", "CASUAL", "HALF_DAY"].includes(r.status)
-    ).length;
+ const halfDayCount = finalRows.filter(
+  r => r.status === "HALF_DAY"
+).length;
 
-    const weekOffCount = finalRows.filter(r => r.status === "WEEKOFF").length;
+const leaveCount = finalRows.filter(
+  r => ["PAID", "UNPAID", "SICK", "CASUAL"].includes(r.status)
+).length;
+
+const weekOffCount = finalRows.filter(r => r.status === "WEEKOFF").length;
 
 const absentCount = Math.max(
   totalEmployees -
@@ -624,6 +607,7 @@ const absentCount = Math.max(
       presentCount +
       weekOffPresentCount +
       wfhCount +
+      halfDayCount+
       leaveCount +
       compOffCount +
       weekOffCount
@@ -636,6 +620,7 @@ const absentCount = Math.max(
       present: presentCount,
       weekOffPresent: weekOffPresentCount,
       wfh: wfhCount,
+      halfDay: halfDayCount,
       leave: leaveCount,
       compOff: compOffCount,
       weekOff: weekOffCount,
@@ -653,6 +638,105 @@ const absentCount = Math.max(
     return res.status(500).json({
       success: false,
       message: "Server error",
+    });
+  }
+};
+/* =======================================================
+   ADMIN — HALF DAY DECISION (APPROVE / REJECT)
+======================================================= */
+export const decideHalfDay = async (req, res) => {
+  try {
+    if (req.user.role !== "ADMIN") {
+      return res.status(403).json({ success: false, message: "Admin only" });
+    }
+
+    const { attendanceId, action } = req.body;
+
+    if (!attendanceId || !["APPROVE", "REJECT"].includes(action)) {
+      return res.status(400).json({ success: false, message: "Invalid request" });
+    }
+
+    const attendance = await prisma.attendance.findUnique({
+      where: { id: attendanceId },
+      include: { user: true }
+    });
+
+    if (!attendance || !attendance.lateHalfDayEligible) {
+      return res.status(400).json({
+        success: false,
+        message: "No pending half-day request"
+      });
+    }
+
+  const alreadyLeave = await prisma.leave.findFirst({
+  where: {
+    userId: attendance.userId,
+    type: "HALF_DAY",
+    startDate: attendance.date,
+    endDate: attendance.date
+  }
+});
+
+if (alreadyLeave) {
+  return res.status(400).json({
+    success: false,
+    message: "Half-day already applied for this date"
+  });
+}
+
+    /* =========================
+       APPROVE
+    ========================= */
+    if (action === "APPROVE") {
+
+      // 1️⃣ Update attendance
+      await prisma.attendance.update({
+        where: { id: attendanceId },
+        data: {
+          status: "HALF_DAY",
+          lateHalfDayEligible: false
+        }
+      });
+
+      // 2️⃣ Create HALF DAY leave
+      await prisma.leave.create({
+        data: {
+          userId: attendance.userId,
+          type: "HALF_DAY",
+          status: "APPROVED",
+          startDate: attendance.date,
+          endDate: attendance.date,
+          reason: "Late check-in"
+        }
+      });
+
+      return res.json({
+        success: true,
+        message: "Half-day approved"
+      });
+    }
+
+    /* =========================
+       REJECT
+    ========================= */
+    await prisma.attendance.update({
+      where: { id: attendanceId },
+      data: {
+        status: "PRESENT",
+        lateHalfDayEligible: false
+      }
+    });
+
+    return res.json({
+      success: true,
+      message: "Half-day rejected, marked present"
+    });
+
+  } catch (err) {
+    console.error("[decideHalfDay ERROR]", err);
+    return res.status(500).json({
+      success: false,
+      message: "Server error"
     });
   }
 };
@@ -746,13 +830,12 @@ export const exportAttendance = async (req, res) => {
     if (departmentId) where.user = { departmentId };
 
   const rows = await prisma.attendance.findMany({
-  where,
-  include: {
-    user: {
-      where: { isActive: true } // ⭐ FIX
-    }
-  },
-  orderBy: { date: "asc" }
+where: {
+  ...where,
+  user: { isActive: true }
+},
+include: { user: true },
+orderBy: { date: "asc" }
 });
 
     if (format === "csv") {

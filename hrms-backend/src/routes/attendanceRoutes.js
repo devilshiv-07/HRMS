@@ -8,6 +8,7 @@ import {
   getAttendanceForUser,
   getUserMonthlyLogs,
   deleteAttendance,
+  decideHalfDay,
   exportAttendance
 } from "../controllers/attendanceController.js";
 
@@ -123,6 +124,12 @@ router.delete(
   "/:id",
   requireAuth(["ADMIN"]),
   deleteAttendance
+);
+
+router.post(
+  "/half-day/decision",
+  requireAuth(["ADMIN"]),
+  decideHalfDay
 );
 
 /* =======================================================

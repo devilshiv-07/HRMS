@@ -172,7 +172,11 @@ export default function AttendanceEmployee() {
 
       /* ⭐ KPI CALCULATION (from full year) */
 const present = Object.values(calendarMap).filter(s => s === "PRESENT" || s === "LATE").length;
-const leave = Object.values(calendarMap).filter( s => s === "LEAVE" || s === "HALF_DAY").length;
+const leave =
+  Object.values(calendarMap).filter(s => s === "LEAVE").length +
+  Object.values(calendarMap).filter(
+    s => s === "HALF_DAY" || s === "HALF_DAY_PENDING"
+  ).length * 0.5;
 const wfh = Object.values(calendarMap).filter(s => s === "WFH").length;
 const weekoffPresent = Object.values(calendarMap).filter( s => s === "WEEKOFF_PRESENT").length;
   setKpi({ present, leave, wfh, weekoffPresent});
@@ -234,37 +238,54 @@ const loadAttendance = useCallback(
       });
 const todayIso = toISODate(new Date());
 const todayLog = fullData.logs.find((x) => x.date === todayIso);
-if (todayLog?.status === "PRESENT") newCal[todayIso] = "PRESENT";
+if (todayLog?.status === "PRESENT") {
+  const existing = newCal[todayIso];
+
+  // ⛔ approved statuses ko override mat karo
+  if (!["WFH", "LEAVE", "HALF_DAY", "HALF_DAY_PENDING"].includes(existing)) {
+    newCal[todayIso] = "PRESENT";
+  }
+}
 
 // ⭐ If WeekOff day + Check-In exists → Show PRESENT instead of ABSENT
 // ⭐ If WeekOff day + Check-In exists → Show PRESENT or WEEKOFF in UI
 if (weekOff) {
   Object.keys(newCal).forEach(date => {
-    const dayName = new Date(date).toLocaleDateString("en-US",{weekday:"long"});
+    const dayName = new Date(date).toLocaleDateString("en-US", { weekday: "long" });
 
     const isWeekOffDate =
       (weekOff.isFixed && weekOff.offDay === dayName) ||
-      (!weekOff.isFixed && toISODate(weekOff.offDate) === date); // <-- FIX
+      (!weekOff.isFixed && toISODate(weekOff.offDate) === date);
 
     const log = fullData.logs.find(l => l.date === date);
+    const existing = newCal[date];
 
-if (isWeekOffDate) {
-  if (log?.status === "WEEKOFF_PRESENT") {
-    newCal[date] = "WEEKOFF_PRESENT";
-  } else {
+    if (!isWeekOffDate) return;
+
+    // 🟢 Highest priority
+    if (log?.status === "WEEKOFF_PRESENT") {
+      newCal[date] = "WEEKOFF_PRESENT";
+      return;
+    }
+
+    // ⛔ Approved statuses should NEVER be overridden
+    if (["WFH", "LEAVE", "HALF_DAY", "HALF_DAY_PENDING"].includes(existing)) {
+      return;
+    }
+
+    // Default weekoff
     newCal[date] = "WEEKOFF";
-  }
-}
   });
 }
+
 
       /* ⭐ KPI CALCULATION FOR FILTER RANGE */
 const present = Object.values(newCal).filter(
   s => s === "PRESENT" || s === "LATE"
 ).length;
-const leave = Object.values(newCal).filter(
-  s => s === "LEAVE" || s === "HALF_DAY"
-).length;
+const leave =
+  Object.values(newCal).filter(s => s === "LEAVE").length +
+  Object.values(newCal).filter(s => s === "HALF_DAY").length * 0.5;
 const wfh = Object.values(newCal).filter(s => s === "WFH").length;
 const weekoffPresent = Object.values(newCal)
   .filter(s => s === "WEEKOFF_PRESENT").length;
@@ -614,14 +635,16 @@ return (
                 ? "bg-purple-300 text-black font-bold dark:bg-purple-700 dark:text-white"   // ⭐ overlap UI
                 : isHoliday
                 ? "bg-yellow-300 text-black font-bold dark:bg-yellow-600"
+                : status === "HALF_DAY_PENDING"|| status === "HALF_DAY"
+  ? "bg-yellow-300 text-black font-bold dark:bg-yellow-600"
                 : status === "WEEKOFF_PRESENT"
                 ? "bg-gray-300 dark:bg-gray-600 text-black dark:text-white"
               : isWeekOff
                 ? "bg-orange-200 text-black dark:bg-orange-600"
+                : status === "WFH"
+                  ? "bg-blue-100 text-blue-700 dark:bg-blue-800 dark:text-blue-200"
               : status === "PRESENT"
                 ? "bg-green-100 text-green-700 dark:bg-green-800 dark:text-green-200"
-              : status === "WFH"
-                ? "bg-blue-100 text-blue-700 dark:bg-blue-800 dark:text-blue-200"
               : status === "LEAVE"
                 ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-700 dark:text-yellow-200"
               : "bg-red-100 text-red-700 dark:bg-red-800 dark:text-red-200"
@@ -633,6 +656,10 @@ return (
 {isHoliday ? (
   <div className="text-[7px] sm:text-[8px] leading-none font-bold truncate w-full text-center">
     {holidayName}
+  </div>
+): status === "WEEKOFF_PRESENT" ? (
+  <div className="text-[7px] sm:text-[8px] font-bold truncate">
+    WeekOff Present
   </div>
 ) : isWeekOff ? (
   <div className="text-[7px] leading-none truncate w-full text-center">WeekOff</div>
@@ -679,16 +706,17 @@ return (
         className={`p-3 sm:p-4 rounded-xl text-center shadow border dark:border-[#2a2c33]
         ${d.isOverlap ? "bg-purple-300 dark:bg-purple-700 dark:text-white"
         : d.isHoliday ? "bg-yellow-300 dark:bg-yellow-600 text-black font-bold"
+        : d.status === "HALF_DAY_PENDING"|| d.status === "HALF_DAY" ? "bg-yellow-300 dark:bg-yellow-600 text-black font-bold"
         : d.status === "WEEKOFF_PRESENT" ? "bg-gray-300 dark:bg-gray-600 text-black dark:text-white"
         : d.isWeekOff ? "bg-orange-300 dark:bg-orange-600 text-black font-bold"
-        : d.status === "PRESENT" ? "bg-green-100 dark:bg-green-800 dark:text-green-200"
         : d.status === "WFH" ? "bg-blue-100 dark:bg-blue-800 dark:text-blue-200"
+        : d.status === "PRESENT" ? "bg-green-100 dark:bg-green-800 dark:text-green-200"
         : d.status === "LEAVE" ? "bg-yellow-200 dark:bg-yellow-700"
         : "bg-red-100 dark:bg-red-800 dark:text-red-200"
         }`}>
           <div className="text-lg sm:text-2xl font-bold">{d.day}</div>
           <div className="text-[10px] font-semibold leading-tight">
-            {d.isHoliday ? d.holidayName : d.isWeekOff ? "WeekOff" : d.status}
+            {d.isHoliday ? d.holidayName: d.status === "WEEKOFF_PRESENT" ? "WeekOff Present":d.isWeekOff ? "WeekOff" : d.status}
           </div>
       </div>
     ));
@@ -713,16 +741,17 @@ return (
         className={`p-3 sm:p-4 rounded-xl text-center shadow border dark:border-[#2a2c33]
         ${d.isOverlap ? "bg-purple-300 dark:bg-purple-700 dark:text-white"
         : d.isHoliday ? "bg-yellow-300 dark:bg-yellow-600 text-black font-bold"
+        : d.status === "HALF_DAY_PENDING" || d.status === "HALF_DAY" ? "bg-yellow-300 dark:bg-yellow-600 text-black font-bold"
         : d.status === "WEEKOFF_PRESENT" ? "bg-gray-300 dark:bg-gray-600 text-black dark:text-white"
         : d.isWeekOff ? "bg-orange-300 dark:bg-orange-600 text-black font-bold"
-        : d.status === "PRESENT" ? "bg-green-100 dark:bg-green-800 dark:text-green-200"
         : d.status === "WFH" ? "bg-blue-100 dark:bg-blue-800 dark:text-blue-200"
+        : d.status === "PRESENT" ? "bg-green-100 dark:bg-green-800 dark:text-green-200"
         : d.status === "LEAVE" ? "bg-yellow-200 dark:bg-yellow-700"
         : "bg-red-100 dark:bg-red-800 dark:text-red-200"
       }`}>
         <div className="text-lg sm:text-2xl font-bold">{d.day}</div>
         <div className="text-[10px] font-semibold leading-tight">
-          {d.isHoliday ? d.holidayName : d.isWeekOff ? "WeekOff" : d.status}
+          {d.isHoliday ? d.holidayName: d.status === "WEEKOFF_PRESENT"  ? "WeekOff Present": d.isWeekOff ? "WeekOff" : d.status}
         </div>
       </div>
     );
@@ -795,23 +824,24 @@ return (
       </div>
 
       <div className="flex flex-wrap gap-3 mt-1 text-xs sm:text-sm dark:text-gray-300">
-        <span
-          className={`px-2 py-1 rounded-full text-xs font-bold 
-          ${
-            log.status === "WEEKOFF_PRESENT"
-              ? "bg-gray-300 text-black dark:bg-gray-600 dark:text-white"
-              : log.status === "PRESENT"
-              ? "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-200"
-              : log.status === "WFH"
-              ? "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-200"
-              : log.status === "LEAVE"
-              ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-800 dark:text-yellow-200"
-              : "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-200"
-          }`}
-        >
-          {log.status}
-        </span>
-
+<span
+  className={`px-2 py-1 rounded-full text-xs font-bold 
+    ${
+      log.status === "HALF_DAY_PENDING"
+        ? "bg-yellow-200 text-yellow-800 dark:bg-yellow-700 dark:text-black"
+        : log.status === "WEEKOFF_PRESENT"
+        ? "bg-gray-300 text-black dark:bg-gray-600 dark:text-white"
+        : log.status === "WFH"
+        ? "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-200"
+        : log.status === "PRESENT"
+        ? "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-200"
+        : log.status === "LEAVE" || log.status === "HALF_DAY"
+        ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-800 dark:text-yellow-200"
+        : "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-200"
+    }`}
+>
+  {log.status === "HALF_DAY_PENDING" ? "HALF DAY (Pending)" : log.status}
+</span>
         <span><b>In:</b> {formatTime(log.checkIn)}</span>
         {log.checkOut && (
           <span><b>Out:</b> {formatTime(log.checkOut)}</span>

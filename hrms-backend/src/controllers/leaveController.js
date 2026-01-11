@@ -1,6 +1,8 @@
 import prisma from "../prismaClient.js";
 import { sendRequestNotificationMail } from "../utils/sendMail.js";
 import { getAdminAndManagers } from "../utils/getApprovers.js";
+import { creditMonthlyLeaveIfNeeded } from "../utils/leaveCredit.js";
+
 
 const isHalfDay = (type) => type === "HALF_DAY";
 const getDayName = (d) => new Date(d).toLocaleDateString("en-US",{weekday:"long"});
@@ -17,10 +19,110 @@ const getLeaveTypeName = (type) => {
   return typeNames[type] || "Leave";
 };
 
+const toISO = (d) => {
+  const x = new Date(d);
+  return (
+    x.getFullYear() +
+    "-" +
+    String(x.getMonth() + 1).padStart(2, "0") +
+    "-" +
+    String(x.getDate()).padStart(2, "0")
+  );
+};
+
+// 🔥 MAIL DATE FORMATTER (single date vs range)
+const formatMailDateRange = (start, end) => {
+  const s = toISO(start);
+  const e = toISO(end);
+
+  // same date / today
+  if (s === e) {
+    return `Date: ${s}`;
+  }
+
+  // date range
+  return `From: ${s} → To: ${e}`;
+};
+const formatResponsiblePerson = (user) => {
+  if (!user) return null;
+  return `Responsibility Given To: ${user.firstName} ${user.lastName || ""}`.trim();
+};
+
+async function syncAttendanceWithLeave(leave) {
+  const start = new Date(leave.startDate);
+  const end = new Date(leave.endDate);
+
+  const weekOff = await prisma.weeklyOff.findFirst({
+    where: { userId: leave.userId }
+  });
+
+  const holidays = await prisma.holiday.findMany({
+    where: {
+      date: { gte: start, lte: end }
+    }
+  });
+
+  let cur = new Date(start);
+  cur.setHours(0, 0, 0, 0);
+
+  while (cur <= end) {
+    const iso = toISO(cur);
+    const dayName = cur.toLocaleDateString("en-US", { weekday: "long" });
+
+    const isHoliday = holidays.some(
+      h => toISO(h.date) === iso
+    );
+
+    const isWeekOff =
+      weekOff &&
+      (
+        (weekOff.isFixed && weekOff.offDay === dayName) ||
+        (!weekOff.isFixed && weekOff.offDate && toISO(weekOff.offDate) === iso)
+      );
+
+    // ❌ Skip holiday & weekly off completely
+    if (!isHoliday && !isWeekOff) {
+      const existing = await prisma.attendance.findFirst({
+        where: {
+          userId: leave.userId,
+          date: cur
+        }
+      });
+
+      if (existing) {
+        await prisma.attendance.update({
+          where: { id: existing.id },
+          data: {
+            status: leave.type,
+            lateHalfDayEligible: false
+          }
+        });
+      } else {
+        await prisma.attendance.create({
+          data: {
+            userId: leave.userId,
+            date: cur,
+            status: leave.type
+          }
+        });
+      }
+    }
+
+    cur.setDate(cur.getDate() + 1);
+  }
+}
+
 /* --------------------------------------------------------
    CREATE LEAVE — Employees only
 -------------------------------------------------------- */
 export const createLeave = async (req, res) => {
+  // 🔄 CREDIT MONTHLY LEAVE (AUTO)
+const currentUser  = await prisma.user.findUnique({
+  where: { id: req.user.id }
+});
+
+await creditMonthlyLeaveIfNeeded(currentUser, prisma);
+
   try {
    const { type, startDate, endDate, reason, responsiblePerson } = req.body;
 
@@ -29,8 +131,8 @@ export const createLeave = async (req, res) => {
     }
     // ⛔ COMP OFF but balance is zero
     if (type === "COMP_OFF") {
-     const user = await prisma.user.findUnique({ where: { id: req.user.id } });
-     if (!user || user.compOffBalance <= 0) {
+     const compUser  = await prisma.user.findUnique({ where: { id: req.user.id } });
+     if (!compUser || compUser.compOffBalance <= 0) {
        return res.status(400).json({
          success: false,
          message: "Insufficient Comp-Off balance"
@@ -40,44 +142,7 @@ export const createLeave = async (req, res) => {
     if (isHalfDay(type) && startDate !== endDate) {
       return res.status(400).json({ success: false, message: "Half Day must be for a single date" });
     }
-// ================== HOLIDAY CHECK ==================
-const holidays = await prisma.holiday.findMany({
-  where:{
-    date:{ gte:new Date(startDate), lte:new Date(endDate) }
-  }
-});
-
-if(holidays.length>0){
-  return res.status(400).json({
-    success:false,
-    message:`Cannot apply leave on holiday (${holidays[0].title})`
-  });
-}
-
-// ================== WEEKOFF CHECK ==================
-const weekOff = await prisma.weeklyOff.findFirst({ where:{ userId:req.user.id } });
-
-if(weekOff){
-  const start = new Date(startDate);
-  const end = new Date(endDate);
-  let cur = new Date(start);
-
-  while(cur<=end){
-    const iso = cur.toISOString().split("T")[0];
-    const dayName = getDayName(cur);
-
-    const isFixed = weekOff.isFixed && weekOff.offDay===dayName;
-    const isSpecial = !weekOff.isFixed && weekOff.offDate===iso;
-
-    if(isFixed || isSpecial){
-      return res.status(400).json({
-        success:false,
-        message:`Cannot apply leave on Weekly Off (${dayName})`
-      });
-    }
-    cur.setDate(cur.getDate()+1);
-  }
-}
+    
     const requestStart = new Date(startDate);
     const requestEnd = new Date(endDate);
     // 🔥 RULE: 3+ DAYS LEAVE → REASON COMPULSORY
@@ -115,6 +180,17 @@ if (type === "WFH" && !reason?.trim()) {
       });
     }
 
+const isChargeableLeave = !["WFH", "UNPAID", "COMP_OFF"].includes(type);
+// 🔐 BALANCE CHECK
+const daysRequested =
+  !isChargeableLeave ? 0  : type === "HALF_DAY"  ? 0.5 : Math.floor((new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24)) + 1;
+
+if (currentUser.leaveBalance < daysRequested) {
+  return res.status(400).json({
+    success: false,
+    message: `Insufficient Leave Balance. Available: ${currentUser.leaveBalance}`
+  });
+}
     /* Get all managers */
     const employee = await prisma.user.findUnique({
       where:{ id:req.user.id },
@@ -156,6 +232,15 @@ if (responsiblePerson) {
       },
       include:{ user:true , responsiblePerson: true   }  // <-- IMPORTANT FIX (mail needs name)
     });
+    
+const updatedUser = await prisma.user.findUnique({
+  where: { id: req.user.id },
+  select: {
+    leaveBalance: true,
+    lastLeaveCredit: true,
+    compOffBalance: true,
+  }
+});
 
     /* Create approvals */
     await prisma.leaveApproval.createMany({
@@ -170,19 +255,20 @@ if (responsiblePerson) {
         subject:"New Leave Request Submitted",
         title:"Leave / WFH / Half-Day Request",
         employeeName:`${leave.user.firstName} ${leave.user.lastName||""}`,
-        details:[
-          `Type: ${getLeaveTypeName(type)}`,
-          `From: ${startDate}`,
-          `To: ${endDate}`,
-          reason && `Reason: ${reason}`
-        ].filter(Boolean)
+details:[
+  `Type: ${getLeaveTypeName(type)}`,
+  formatMailDateRange(requestStart, requestEnd),
+  formatResponsiblePerson(leave.responsiblePerson),
+  reason && `Reason: ${reason}`
+].filter(Boolean)
       });
     }catch(e){ console.log("Mail fail:",e.message); }
 
     return res.json({
       success:true,
       message:`Your ${getLeaveTypeName(type)} request submitted successfully`,
-      leaveId:leave.id
+      leaveId:leave.id,
+      updatedUser 
     });
 
   } catch (error) {
@@ -528,9 +614,37 @@ isEmployeeDeleted: false,
     status: finalStatus,
     rejectReason: finalStatus==="REJECTED" ? reason||"" : null
   },
-  include:{ user:true }
-    });
+ include:{
+  user: true,
+  responsiblePerson: true   // ✅ REQUIRED
+}
+}); 
+// =====================================================
+// ✅ DEDUCT LEAVE BALANCE (ONLY ON FINAL APPROVAL)
+// =====================================================
+const isChargeableLeave = !["WFH", "UNPAID", "COMP_OFF"].includes(updated.type);
+if (finalStatus === "APPROVED") {
+  await syncAttendanceWithLeave(updated);
+}
+if (finalStatus === "APPROVED" && isChargeableLeave) {
+  const leaveDays =
+    updated.type === "HALF_DAY"
+      ? 0.5
+      : Math.floor(
+          (updated.endDate - updated.startDate) /
+            (1000 * 60 * 60 * 24)
+        ) + 1;
 
+  await prisma.user.update({
+    where: { id: updated.userId },
+    data: {
+      leaveBalance: {
+        decrement: leaveDays
+      }
+    }
+  });
+}
+  
     // =====================================================
     // 📩 Email Notification
     // =====================================================
@@ -540,13 +654,13 @@ isEmployeeDeleted: false,
         subject:`Leave Request ${finalStatus}`,
         title:"Leave Status Update",
         employeeName:`${updated.user.firstName} ${updated.user.lastName}`,
-        details:[
-          `Type: ${getLeaveTypeName(updated.type)}`,
-          `From: ${updated.startDate.toDateString()}`,
-          `To: ${updated.endDate.toDateString()}`,
-          `Status: ${finalStatus}`,
-          finalStatus==="REJECTED" && `Reason: ${reason||"Not specified"}`
-        ].filter(Boolean)
+details:[
+  `Type: ${getLeaveTypeName(updated.type)}`,
+  formatMailDateRange(updated.startDate, updated.endDate),
+  formatResponsiblePerson(updated.responsiblePerson), // ✅ ADDED
+  `Status: ${finalStatus}`,
+  finalStatus==="REJECTED" && `Reason: ${reason||"Not specified"}`
+].filter(Boolean)
       });
     } catch(e){ console.log("Mail fail:",e.message); }
 

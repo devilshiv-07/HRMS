@@ -70,6 +70,7 @@ const load = async () => {
   }
   icon={<FiBriefcase />} 
 />
+            <QuickInfo label="Leave Balance" value={emp.leaveBalance ?? 0} icon={<FiCalendar />} />
             <QuickInfo label="Joined" value={new Date(emp.createdAt).toLocaleDateString()} icon={<FiCalendar />} />
             <QuickInfo label="Active" value={emp.isActive ? "Yes" : "No"} icon={<FiUser />} />
           </div>
@@ -196,6 +197,11 @@ function LeavesSection({ emp, limit, setLimit }) {
           value={stats.wfhDays ?? 0}
           icon={<FiClock />}
         />
+        <InfoCard
+  label="Available Balance"
+  value={emp.leaveBalance ?? 0}
+  icon={<FiCalendar />}
+/>
         <InfoCard
           label="Remaining"
           value={`${stats.remainingLeaves ?? 0} / ${stats.yearlyQuota ?? 21}`}

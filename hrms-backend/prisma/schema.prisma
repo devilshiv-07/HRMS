@@ -33,6 +33,10 @@ model User {
   department         Department?      @relation("DepartmentUsers", fields: [departmentId], references: [id])
   managedDepartments Department[]     @relation("DepartmentManagers")
 
+  // 🔥 LEAVE SYSTEM
+  leaveBalance     Float    @default(0)     // current usable balance
+  lastLeaveCredit  DateTime?                // last month credit date
+  
   leaveApprovals         LeaveApproval[]
   reimbursementApprovals ReimbursementApproval[]
 
@@ -119,6 +123,7 @@ model Attendance {
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   user      User      @relation(fields: [userId], references: [id])
+  lateHalfDayEligible Boolean @default(false)
 
   @@index([userId, date])
   @@map("attendances")

@@ -3,7 +3,6 @@
 // =============================
 import React, { useEffect, useState, useCallback } from "react";
 import api from "../api/axios";
-
 /* ----------------------------------------------------------
    HELPERS
 ---------------------------------------------------------- */
@@ -62,6 +61,16 @@ function StatCard({ title, value, color }) {
     </div>
   );
 }
+const STATUS_LABELS = {
+  PRESENT: "Present",
+  WEEKOFF_PRESENT: "WeekOff Present",
+  WEEKOFF: "WeekOff",
+  WFH: "WFH",
+  HALF_DAY: "Half Day",
+  HALF_DAY_PENDING: "Half Day By Late Check-In",
+  COMP_OFF: "CompOff",
+  ABSENT: "Absent",
+};
 
 /* ----------------------------------------------------------
    MAIN SCREEN
@@ -84,6 +93,7 @@ export default function AttendanceAdmin() {
 const [summary, setSummary] = useState({
   totalEmployees: 0,
   present: 0,
+  halfDay: 0, 
   weekOffPresent: 0,
   wfh: 0,
   leave: 0,
@@ -144,6 +154,7 @@ totalHours:
 setSummary({
   totalEmployees: s.totalEmployees ?? 0,
   present: s.present ?? 0,
+  halfDay: s.halfDay ?? 0, 
   wfh: s.wfh ?? 0,
   leave: s.leave ?? 0,
   compOff: s.compOff ?? 0,
@@ -194,6 +205,19 @@ setSummary({
     }
   };
 
+// ✅ ADMIN HALF DAY DECISION
+const decideHalfDay = async (attendanceId, action) => {
+  try {
+    await api.post("/attendance/half-day/decision", {
+      attendanceId,
+      action, // "APPROVE" | "REJECT"
+    });
+    loadAttendance();
+  } catch (err) {
+    alert(err?.response?.data?.message || "Action failed");
+  }
+};
+
   /* OPEN EMPLOYEE MODAL */
   const openEmployeeModal = async (userId) => {
     try {
@@ -228,14 +252,15 @@ setSummary({
 
       {/* SUMMARY CARDS */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <StatCard title="Total Employees" value={summary.totalEmployees} color="text-indigo-600"/>
         <StatCard title="Present" value={summary.present} color="text-green-600" />
+        <StatCard title="On HalfDay" value={summary.halfDay} color="text-yellow-600" />
         <StatCard title="WFH" value={summary.wfh} color="text-blue-600" />
-        <StatCard title="Leave" value={summary.leave} color="text-yellow-600" />
-        <StatCard title="Absent" value={summary.absent} color="text-red-600" />
-        <StatCard title="Employees" value={summary.totalEmployees} color="text-indigo-600"/>
-        <StatCard title="Comp-Off" value={summary.compOff} color="text-yellow-400"/>
+        <StatCard title="WeekOff Present" value={summary.weekOffPresent} color="text-gray-500" />
+        <StatCard title="On Leave" value={summary.leave} color="text-yellow-600" />
+        <StatCard title="On CompOff Leave" value={summary.compOff} color="text-yellow-400"/>
         <StatCard title="Week Off" value={summary.weekOff} color="text-orange-400"/>
-        <StatCard title="Week-Off Present" value={summary.weekOffPresent} color="text-gray-500" />
+        <StatCard title="Absent" value={summary.absent} color="text-red-600" />
       </div>
 
       {/* FILTER PANEL */}
@@ -252,6 +277,7 @@ setSummary({
         loading={loading}
         rows={attendance}
         onView={openEmployeeModal}
+        onDecideHalfDay={decideHalfDay}
       />
 
       {/* MODAL */}
@@ -419,6 +445,7 @@ const colors = {
   WEEKOFF_PRESENT: "bg-gray-200 text-gray-700",
   WEEKOFF: "bg-orange-100 text-orange-700",
   WFH: "bg-blue-100 text-blue-700",
+  HALF_DAY_PENDING: "bg-yellow-200 text-yellow-800",
   HALF_DAY: "bg-yellow-100 text-yellow-700",
   COMP_OFF: "bg-purple-100 text-purple-700",
   ABSENT: "bg-red-100 text-red-700",
@@ -426,7 +453,7 @@ const colors = {
 
   return (
     <span className={`px-3 py-1 rounded-lg text-xs font-semibold ${colors[status]}`}>
-      {status}
+       {STATUS_LABELS[status] || status}
     </span>
   );
 }
@@ -483,7 +510,7 @@ function MobileAttendanceCards({ rows, onView }) {
 /* ----------------------------------------------------------
    DESKTOP TABLE VIEW
 ---------------------------------------------------------- */
-function AttendanceTable({ rows, loading, onView }) {
+function AttendanceTable({ rows, loading, onView, onDecideHalfDay}) {
   return (
     <>
       {/* MOBILE CARDS */}
@@ -546,14 +573,33 @@ function AttendanceTable({ rows, loading, onView }) {
                     <StatusBadge status={r.status} />
                   </td>
 
-                  <td className="p-2">
-                    <button
-                      onClick={() => onView(r.userId)}
-                      className="text-indigo-600 underline"
-                    >
-                      View Logs
-                    </button>
-                  </td>
+<td className="p-2">
+  {r.lateHalfDayEligible ? (
+    <div className="flex gap-2">
+<button
+  onClick={() => onDecideHalfDay(r.id, "REJECT")}
+  className="px-2 py-1 bg-green-600 text-white rounded"
+>
+  Remain Present
+</button>
+
+<button
+  onClick={() => onDecideHalfDay(r.id, "APPROVE")}
+  className="px-2 py-1 bg-red-600 text-white rounded"
+>
+  Yes ,Half Day 
+</button>
+
+    </div>
+  ) : (
+    <button
+      onClick={() => onView(r.userId)}
+      className="text-indigo-600 underline"
+    >
+      View Logs
+    </button>
+  )}
+</td>
 
                 </tr>
               ))
@@ -621,7 +667,7 @@ function EmployeeModal({ employee, logs, onClose }) {
                 <p className="text-xs sm:text-sm mt-1 font-medium">
                   Status:{" "}
                   <span className="font-bold">
-                    {d.status}
+                   {STATUS_LABELS[d.status] || d.status}
                   </span>
                 </p>
 
