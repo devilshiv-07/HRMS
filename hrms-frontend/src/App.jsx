@@ -1,5 +1,6 @@
 import React, { useEffect } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
+import DeviceGuard from "./components/DeviceGuard";
 
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
@@ -46,6 +47,7 @@ export default function App() {
   }, []);
 
   return (
+  <DeviceGuard>
     <Routes>
 
       {/* PUBLIC ROUTES */}
@@ -223,5 +225,6 @@ export default function App() {
       {/* CATCH-ALL */}
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
+    </DeviceGuard>
   );
 }
