@@ -22,6 +22,8 @@ export default function AdminReimbursement() {
  const [actionLoadingId, setActionLoadingId] = useState(null);   // approve
  const [rejectLoadingId, setRejectLoadingId] = useState(null);   // 🔥 new for reject
 
+ const BASE_URL = import.meta.env.VITE_API_BASE_URL;
+
   const loadAll = async () => {
     try {
       setLoading(true);
@@ -182,17 +184,23 @@ const submitReject = async (reason)=>{
 
                 {/* BILLS */}
                 <div className="mt-3 space-y-1">
-                  {r.bills.map((b) => (
-                    <a
-                      key={b.id}
-                      href={b.fileUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-blue-600 underline text-sm block"
-                    >
-                      ₹{b.amount} — {b.note || "Bill"}
-                    </a>
-                  ))}
+
+{Array.isArray(r.bills) && r.bills.map((b, index) => {
+  const url = b.fileUrl.startsWith("http")
+    ? b.fileUrl
+    : `${BASE_URL}/${b.fileUrl}`;
+
+  return (
+    <button
+      key={b.id || `${r.id}-bill-${index}`}
+      onClick={() => window.open(url, "_blank", "noopener,noreferrer")}
+      className="text-blue-600 dark:text-blue-400 underline text-sm block text-left"
+    >
+      ₹{b.amount} — {b.note || "Bill"}
+    </button>
+  );
+})}
+
                 </div>
 
                 {/* REJECT REASON */}
@@ -212,16 +220,14 @@ const submitReject = async (reason)=>{
   <div className="flex gap-3 mt-4">
 
     {/* APPROVE BUTTON */}
-    <button
-      onClick={()=>{
-        setActionLoadingId(r.id);
-        updateStatus(r.id,"APPROVED");
-      }}
-      disabled={actionLoadingId === r.id}
-      className="px-3 py-1 bg-green-600 text-white rounded-lg text-sm disabled:opacity-50"
-    >
-      {actionLoadingId === r.id ? "Please wait..." : "Approve"}
-    </button>
+<button
+  onClick={() => updateStatus(r.id, "APPROVED")}
+  disabled={actionLoadingId === r.id}
+  className="px-3 py-1 bg-green-600 text-white rounded-lg text-sm disabled:opacity-50"
+>
+  {actionLoadingId === r.id ? "Please wait..." : "Approve"}
+</button>
+
 
     {/* REJECT BUTTON - popup first */}
     <button
