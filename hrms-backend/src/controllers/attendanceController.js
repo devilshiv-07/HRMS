@@ -186,7 +186,14 @@ const halfDayCutoff = new Date(
 );
 
 if (isWeekOff) {
-  status = "WEEKOFF_PRESENT";
+  if (today >= halfDayCutoff) {
+    // 🔥 WeekOff + Late
+    status = "HALF_DAY_PENDING";
+    lateHalfDayEligible = true;
+  } else {
+    // WeekOff + On time
+    status = "WEEKOFF_PRESENT";
+  }
 }
 else if (leaveToday?.type === "WFH") {
   status = "WFH";
@@ -219,6 +226,10 @@ else {
             status, lateHalfDayEligible
           }
         });
+        // ✅ AUTO COMP-OFF ON WEEKOFF CHECK-IN (IMMEDIATE)
+if (status === "WEEKOFF_PRESENT") {
+  await autoGrantCompOff(user.id, todayISO);
+}
 
     return res.json({
       success: true,
@@ -268,10 +279,6 @@ const updated = await prisma.attendance.update({
   data: { checkOut: nowIST }
 });
 
-    // ⭐ Auto Comp-Off Grant if worked on weekly off
-  if (existing.status === "WEEKOFF_PRESENT") {
-  await autoGrantCompOff(user.id, existing.date);
-}
     return res.json({ success: true, message: "Checked out", attendance: updated });
   } catch (err) {
     console.error("[checkOut ERROR]", err);
@@ -725,22 +732,42 @@ if (alreadyLeave) {
         message: "Half-day approved"
       });
     }
+/* =========================
+   REJECT
+========================= */
 
-    /* =========================
-       REJECT
-    ========================= */
-    await prisma.attendance.update({
-      where: { id: attendanceId },
-      data: {
-        status: "PRESENT",
-        lateHalfDayEligible: false
-      }
-    });
+const iso = new Date(attendance.date);
+iso.setHours(0, 0, 0, 0);
 
-    return res.json({
-      success: true,
-      message: "Half-day rejected, marked present"
-    });
+const dayName = iso.toLocaleDateString("en-US", {
+  weekday: "long"
+});
+
+const weeklyOff = await prisma.weeklyOff.findFirst({
+  where: {
+    userId: attendance.userId,
+    OR: [
+      { isFixed: true, offDay: dayName },
+      { isFixed: false, offDate: iso }
+    ]
+  }
+});
+
+await prisma.attendance.update({
+  where: { id: attendanceId },
+  data: {
+    status: weeklyOff ? "WEEKOFF_PRESENT" : "PRESENT",
+    lateHalfDayEligible: false
+  }
+});
+
+return res.json({
+  success: true,
+  message: weeklyOff
+    ? "Half-day rejected, marked WeekOff Present"
+    : "Half-day rejected, marked present"
+});
+
 
   } catch (err) {
     console.error("[decideHalfDay ERROR]", err);
@@ -808,14 +835,43 @@ export const deleteAttendance = async (req, res) => {
     if (req.user.role !== "ADMIN")
       return res.status(403).json({ success: false, message: "Admin only" });
 
-    await prisma.attendance.delete({ where: { id: req.params.id } });
+    const attendance = await prisma.attendance.findUnique({
+      where: { id: req.params.id }
+    });
 
+    if (!attendance)
+      return res.status(404).json({ success: false, message: "Not found" });
+
+    // 🔥 IF WEEKOFF_PRESENT → revert compOff
+    if (attendance.status === "WEEKOFF_PRESENT") {
+      const iso = toLocalISO(attendance.date);
+
+      const comp = await prisma.compOff.findFirst({
+        where: {
+          userId: attendance.userId,
+          workDate: new Date(iso),
+          status: "APPROVED"
+        }
+      });
+
+      if (comp) {
+        await prisma.$transaction(async (tx) => {
+          await tx.compOff.delete({ where: { id: comp.id } });
+          await tx.user.update({
+            where: { id: attendance.userId },
+            data: { compOffBalance: { decrement: comp.duration } }
+          });
+        });
+      }
+    }
+    await prisma.attendance.delete({ where: { id: req.params.id } });
     return res.json({ success: true, message: "Attendance deleted successfully" });
   } catch (err) {
     console.error("[deleteAttendance ERROR]", err);
     return res.status(500).json({ success: false, message: "Failed to delete attendance" });
   }
 };
+
 
 /* =======================================================
    EXPORT CSV / EXCEL

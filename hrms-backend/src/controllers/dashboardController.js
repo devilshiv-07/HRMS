@@ -8,10 +8,14 @@ import {
    Helper: Today Range (00:00 → 23:59)
 ===================================================== */
 const getTodayRange = () => {
-  const start = new Date();
+  const nowIST = new Date(
+    new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
+  );
+
+  const start = new Date(nowIST);
   start.setHours(0, 0, 0, 0);
 
-  const end = new Date();
+  const end = new Date(nowIST);
   end.setHours(23, 59, 59, 999);
 
   return { start, end };

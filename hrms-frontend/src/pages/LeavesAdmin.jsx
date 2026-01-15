@@ -202,13 +202,17 @@ const load = async () => {
 
   // 3️⃣ Late Half Day Attendance (from Attendance)
 try {
-  const h = await api.get("/attendance/all?status=HALF_DAY_PENDING");
-  setLateHalfDays(h.data.attendances || []);
+const today = new Date().toISOString().slice(0, 10);
+const h = await api.get(
+  `/attendance/all?start=${today}&end=${today}`
+);
+const pending = (h.data.attendances || []).filter(
+  a => a.status === "HALF_DAY_PENDING"
+);
+setLateHalfDays(pending);
 } catch (err) {
   console.error("Failed to load late half day");
 }
-
-
   setLoading(false);
 };
 

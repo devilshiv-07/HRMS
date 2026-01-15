@@ -248,7 +248,6 @@ if (todayLog?.status === "PRESENT") {
 }
 
 // ⭐ If WeekOff day + Check-In exists → Show PRESENT instead of ABSENT
-// ⭐ If WeekOff day + Check-In exists → Show PRESENT or WEEKOFF in UI
 if (weekOff) {
   Object.keys(newCal).forEach(date => {
     const dayName = new Date(date).toLocaleDateString("en-US", { weekday: "long" });
@@ -262,14 +261,20 @@ if (weekOff) {
 
     if (!isWeekOffDate) return;
 
-    // 🟢 Highest priority
+    // 🟢 1️⃣ Highest priority: WEEKOFF_PRESENT
     if (log?.status === "WEEKOFF_PRESENT") {
       newCal[date] = "WEEKOFF_PRESENT";
       return;
     }
 
+    // 🔥 2️⃣ ADD THIS: WeekOff + Late → HALF_DAY_PENDING
+    if (log?.status === "HALF_DAY_PENDING") {
+      newCal[date] = "HALF_DAY_PENDING";
+      return;
+    }
+
     // ⛔ Approved statuses should NEVER be overridden
-    if (["WFH", "LEAVE", "HALF_DAY", "HALF_DAY_PENDING"].includes(existing)) {
+    if (["WFH", "LEAVE", "HALF_DAY"].includes(existing)) {
       return;
     }
 
@@ -277,7 +282,6 @@ if (weekOff) {
     newCal[date] = "WEEKOFF";
   });
 }
-
 
       /* ⭐ KPI CALCULATION FOR FILTER RANGE */
 const present = Object.values(newCal).filter(
@@ -461,6 +465,25 @@ return (
               >
                 Export Excel
               </button>
+{/* <button
+  onClick={async () => {
+    try {
+      setLoading(true);
+      await loadFullYear();          // 🔥 fresh DB fetch
+      loadAttendance(filters);
+    } finally {
+      setLoading(false);
+    }
+  }}
+  disabled={loading}
+  className={`px-4 py-2 text-xs rounded-lg shadow flex items-center gap-1
+    ${loading
+      ? "bg-gray-400 cursor-not-allowed"
+      : "bg-indigo-600 hover:bg-indigo-700 text-white"
+    }`}
+>
+  {loading ? "Refreshing..." : "🔄 Refresh"}
+</button> */}
             </div>
 
             {/* FILTER BUTTONS */}
@@ -563,7 +586,6 @@ return (
 >
  {checkOutSuccess ? "✔" : "Check-out"}
 </button>
-
         </div>
       </div>
 
