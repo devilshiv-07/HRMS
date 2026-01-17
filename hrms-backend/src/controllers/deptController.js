@@ -5,6 +5,9 @@ import prisma from "../prismaClient.js";
 ==================================================== */
 const departmentInclude = {
   members: {
+        where: {
+      user: { isActive: true }   // 🔥 ADD THIS
+    },
     include: {
       user: {
         select: {
@@ -18,6 +21,9 @@ const departmentInclude = {
     }
   },
   managers: {
+      where: {
+      isActive: true  // 🔥 ADD THIS
+    },
     select: {
       id: true,
       firstName: true,
@@ -89,7 +95,7 @@ export const createDepartment = async (req, res) => {
     // validate managers
     for (const id of managerIds) {
       const manager = await prisma.user.findUnique({
-        where: { id }
+        where: { id,  isActive: true, }
       });
 
       if (!manager || manager.role === "ADMIN") {

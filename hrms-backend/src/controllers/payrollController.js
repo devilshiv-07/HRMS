@@ -26,7 +26,7 @@ export const upload = multer({
    FIXED — Full URL Generator (No Double Slashes)
 ============================================================ */
 const getFullUrl = (file) => {
-  const base = process.env.SERVER_URL || "http://localhost:4000";
+  const base = process.env.BASE_URL || "http://localhost:4000";
   // remove double slashes except after "http:"
   return `${base}/${file}`.replace(/([^:]\/)\/+/g, "$1");
 };
@@ -39,7 +39,7 @@ export const getPayrolls = async (req, res) => {
     const isAdmin = req.user.role === "ADMIN";
 
     const payrolls = await prisma.payroll.findMany({
-      where: isAdmin ? {} : { userId: req.user.id },
+      where: isAdmin ? {  user: { isActive: true } } : { userId: req.user.id },
       include: { user: true },
       orderBy: { salaryMonth: "desc" }
     });

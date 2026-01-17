@@ -9,7 +9,7 @@ const getBaseURL = () => {
 
 const api = axios.create({
   baseURL: getBaseURL(),
-  // ❌ withCredentials REMOVED (Option A)
+  // withCredentials REMOVED (Option A)
 });
 
 // ------------------------------------------

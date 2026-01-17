@@ -34,6 +34,12 @@ function toLocalISO(date) {
 }
 // ================= Auto Grant Comp-Off on Weekly Off Work =================
 async function autoGrantCompOff(userId, workDate) {
+  
+  const user = await prisma.user.findFirst({
+  where: { id: userId, isActive: true },
+});
+
+if (!user) return; // 🚫 silently ignore
   // Normalize date (IMPORTANT)
   const isoDate = toLocalISO(workDate);
   const dateObj = new Date(isoDate);
@@ -86,6 +92,17 @@ async function autoGrantCompOff(userId, workDate) {
 export const checkIn = async (req, res) => {
   try {
     const user = req.user;
+    const activeUser = await prisma.user.findFirst({
+  where: { id: user.id, isActive: true },
+});
+
+if (!activeUser) {
+  return res.status(403).json({
+    success: false,
+    message: "Account deactivated. Contact admin.",
+  });
+}
+
     if (!user)
       return res.status(401).json({ success: false, message: "Not authenticated" });
 
@@ -245,6 +262,17 @@ if (status === "WEEKOFF_PRESENT") {
 export const checkOut = async (req, res) => {
   try {
     const user = req.user;
+    const activeUser = await prisma.user.findFirst({
+  where: { id: user.id, isActive: true },
+});
+
+if (!activeUser) {
+  return res.status(403).json({
+    success: false,
+    message: "Account deactivated. Contact admin.",
+  });
+}
+
     if (!user) return res.status(401).json({ success: false, message: "Not authenticated" });
     if (user.role === "ADMIN") return res.status(403).json({ success: false, message: "Admin cannot check out" });
 
@@ -285,6 +313,16 @@ const updated = await prisma.attendance.update({
 export const getMyAttendance = async (req, res) => {
   try {
     const userId = req.user.id;
+    const activeUser = await prisma.user.findFirst({
+  where: { id: userId, isActive: true },
+});
+
+if (!activeUser) {
+  return res.status(403).json({
+    success: false,
+    message: "Account deactivated",
+  });
+}
     const { start, end } = req.query;
 
     /* =====================================================
@@ -467,15 +505,20 @@ export const getAllAttendance = async (req, res) => {
     /* =====================================================
        2️⃣ WEEK OFF CONFIG
     ===================================================== */
-    const weeklyOffs = await prisma.weeklyOff.findMany();
+   const weeklyOffs = await prisma.weeklyOff.findMany({
+  where: { user: { isActive: true } }
+});
 
     /* =====================================================
        3️⃣ ATTENDANCE
     ===================================================== */
-    const attendances = await prisma.attendance.findMany({
-      where: { date: { gte: startDate, lte: endDate } },
-      include: { user: true },
-    });
+const attendances = await prisma.attendance.findMany({
+  where: {
+    date: { gte: startDate, lte: endDate },
+    user: { isActive: true },
+  },
+  include: { user: true },
+});
 
     /* =====================================================
        4️⃣ LEAVES
@@ -678,6 +721,13 @@ export const decideHalfDay = async (req, res) => {
       });
     }
 
+    if (!attendance.user.isActive) {
+  return res.status(400).json({
+    success: false,
+    message: "Cannot decide half-day for deactivated user",
+  });
+}
+
   const alreadyLeave = await prisma.leave.findFirst({
   where: {
     userId: attendance.userId,
@@ -760,12 +810,21 @@ export const getAttendanceForUser = async (req, res) => {
       return res.status(403).json({ success: false, message: "Admin only" });
 
     const userId = req.params.userId;
+    const activeUser = await prisma.user.findFirst({
+  where: { id: userId, isActive: true },
+});
 
-    const rows = await prisma.attendance.findMany({
-      where: { userId },
-      include: { user: { isActive: true },},
-      orderBy: { date: "desc" }
-    });
+if (!activeUser) {
+  return res.status(404).json({
+    success: false,
+    message: "User deactivated",
+  });
+}
+
+const rows = await prisma.attendance.findMany({
+  where: { userId },
+  orderBy: { date: "desc" },
+});
 
     return res.json({ success: true, attendances: rows });
   } catch (err) {
@@ -807,6 +866,7 @@ export const deleteAttendance = async (req, res) => {
   try {
     if (req.user.role !== "ADMIN")
       return res.status(403).json({ success: false, message: "Admin only" });
+    
 
     const attendance = await prisma.attendance.findUnique({
       where: { id: req.params.id }
@@ -814,6 +874,17 @@ export const deleteAttendance = async (req, res) => {
 
     if (!attendance)
       return res.status(404).json({ success: false, message: "Not found" });
+
+        const activeUser = await prisma.user.findFirst({
+        where: { id: attendance.userId, isActive: true },
+        });
+
+if (!activeUser) {
+  return res.status(400).json({
+    success: false,
+    message: "Cannot modify attendance of deactivated user",
+  });
+}
 
     // 🔥 IF WEEKOFF_PRESENT → revert compOff
     if (attendance.status === "WEEKOFF_PRESENT") {

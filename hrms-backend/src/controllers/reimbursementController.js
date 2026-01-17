@@ -63,11 +63,17 @@ const calculateTotal = (bills = []) =>
 
 const validateOwner = async (id, userId) => {
   const record = await prisma.reimbursement.findFirst({
-    where: { id, userId },
+    where: {
+      id,
+      userId,
+      isEmployeeDeleted: false,
+      user: { isActive: true }
+    }
   });
-  if (!record) throw new Error("Unauthorized access");
+  if (!record) throw new Error("Unauthorized or inactive account");
   return record;
 };
+
 
 const updateStatus = async ({ id, status, reason = null }) => {
   return prisma.reimbursement.update({
@@ -107,6 +113,17 @@ export const uploadReimbursementFiles = async (req, res) => {
 ===================================================== */
 export const createReimbursement = async (req, res) => {
   try {
+
+    const activeUser = await prisma.user.findFirst({
+  where: { id: req.user.id, isActive: true }
+});
+
+if (!activeUser) {
+  return res.status(403).json({
+    success: false,
+    message: "Account deactivated. Contact admin.",
+  });
+}
     const { title, description, bills } = req.body;
 
     if (!title || !bills?.length)
@@ -229,7 +246,9 @@ await prisma.reimbursementApproval.createMany({
 ===================================================== */
 export const myReimbursements = async (req,res)=>{
   const list = await prisma.reimbursement.findMany({
-    where:{ userId:req.user.id,isEmployeeDeleted:false },
+    where:{ userId:req.user.id,
+       user: { isActive: true } ,
+       isEmployeeDeleted:false },
     include:{
       bills:true,
       approvals:{ include:{ manager:true }}  // ⚡ same include
@@ -252,6 +271,31 @@ res.json({ success: true, list: fixedList });
 ===================================================== */
 export const employeeDeleteReimbursement = async (req, res) => {
   try {
+    const activeUser = await prisma.user.findFirst({
+  where: { id: req.user.id, isActive: true }
+});
+
+if (!activeUser) {
+  return res.status(403).json({
+    success:false,
+    message:"Account deactivated"
+  });
+}
+const reimbursement = await prisma.reimbursement.findFirst({
+  where: {
+    id: req.params.id,
+    userId: req.user.id,
+    user: { isActive: true }
+  }
+});
+
+if (!reimbursement) {
+  return res.status(403).json({
+    success:false,
+    message:"Account deactivated or reimbursement not found"
+  });
+}
+
     await validateOwner(req.params.id, req.user.id);
 
     await prisma.reimbursement.update({
@@ -274,13 +318,15 @@ export const getManagerReimbursements = async (req, res) => {
 
     const reimbursements = await prisma.reimbursement.findMany({
       where: {
+        isAdminDeleted: false, 
         user: {
+          isActive: true,  
           departments: {
             some: {
               department: { managers: { some: { id: managerId } } }
             }
           }
-        }
+        },
       },
       include: {
         user: true,
@@ -311,7 +357,7 @@ export const getAllReimbursements = async (req, res) => {
       return res.status(403).json({ success: false, message: "Admin only" });
 
 const list = await prisma.reimbursement.findMany({
-  where: { isAdminDeleted: false },
+  where: { isAdminDeleted: false,  user: { isActive: true }   },
   include: {
     user: true,
     bills: true,
@@ -352,6 +398,35 @@ export const updateReimbursementStatus = async (req, res) => {
         message: "Invalid status",
       });
     }
+const reimbursement = await prisma.reimbursement.findUnique({
+  where: { id: reimbursementId },
+  include: {
+    user: {
+      include: {
+        departments: {
+          include: {
+            department: { include: { managers: true } }
+          }
+        }
+      }
+    }
+  }
+});
+
+
+if (!reimbursement || reimbursement.isAdminDeleted) {
+  return res.status(404).json({
+    success:false,
+    message:"Reimbursement not found"
+  });
+}
+
+if (!reimbursement.user.isActive) {
+  return res.status(400).json({
+    success:false,
+    message:"Cannot process reimbursement for deactivated employee"
+  });
+}
 
     /* =====================================================
        🔥 ADMIN — DIRECT FINAL APPROVAL / REJECTION
@@ -393,29 +468,6 @@ export const updateReimbursementStatus = async (req, res) => {
     /* =====================================================
        👤 MANAGER FLOW (Approval Table Based)
     ===================================================== */
-
-    // 1️⃣ Fetch reimbursement + managers
-    const reimbursement = await prisma.reimbursement.findUnique({
-      where: { id: reimbursementId },
-      include: {
-        user: {
-          include: {
-            departments: {
-              include: {
-                department: { include: { managers: true } },
-              },
-            },
-          },
-        },
-      },
-    });
-
-    if (!reimbursement) {
-      return res.status(404).json({
-        success: false,
-        message: "Reimbursement not found",
-      });
-    }
 
     // ❌ Block self approval
     if (reimbursement.userId === actorId) {
@@ -553,7 +605,7 @@ const formatUrl = (url) => {
   return `${BASE_URL}/${url}`;
 };
 
-    const where = { isAdminDeleted: false };
+    const where = { isAdminDeleted: false ,  user: { isActive: true } };
 
     // Role based filter
     if (user.role !== "ADMIN") where.userId = user.id;

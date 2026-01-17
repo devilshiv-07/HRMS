@@ -49,6 +49,12 @@ const formatResponsiblePerson = (user) => {
 };
 
 async function syncAttendanceWithLeave(leave) {
+   const user = await prisma.user.findFirst({
+    where: { id: leave.userId, isActive: true }
+  });
+
+  if (!user) return; // 🚫 silently skip
+
   const start = new Date(leave.startDate);
   const end = new Date(leave.endDate);
 
@@ -117,10 +123,16 @@ async function syncAttendanceWithLeave(leave) {
 -------------------------------------------------------- */
 export const createLeave = async (req, res) => {
   // 🔄 CREDIT MONTHLY LEAVE (AUTO)
-const currentUser  = await prisma.user.findUnique({
-  where: { id: req.user.id }
+const currentUser = await prisma.user.findFirst({
+  where: { id: req.user.id, isActive: true }
 });
 
+if (!currentUser) {
+  return res.status(403).json({
+    success: false,
+    message: "Account deactivated. Contact admin.",
+  });
+}
 await creditMonthlyLeaveIfNeeded(currentUser, prisma);
 
   try {
@@ -214,7 +226,11 @@ if (currentUser.leaveBalance < daysRequested) {
     const managers = employee.departments.flatMap(d=>d.department.managers);
     if(managers.length===0)
       return res.status(400).json({ success:false,message:"No manager assigned" });
-    // 🔐 Responsible Person Validation
+
+    const admins = await prisma.user.findMany({
+    where: { role: "ADMIN", isActive: true },
+    select: { email: true }
+    });
 
 let responsiblePersonId = null;
 
@@ -260,10 +276,15 @@ const updatedUser = await prisma.user.findUnique({
       skipDuplicates:true              // <-- Avoid P2002 crash
     });
 
+const mailRecipients = [...new Set([
+  ...managers.map(m => m.email),
+  ...admins.map(a => a.email)
+])];
+
     /* Send mail */
     try{
       await sendRequestNotificationMail({
-        to: managers.map(m=>m.email),
+        to: mailRecipients,
         subject:"New Leave Request Submitted",
         title:"Leave / WFH / Half-Day Request",
         employeeName:`${leave.user.firstName} ${leave.user.lastName||""}`,
@@ -296,8 +317,12 @@ export const listLeaves = async (req, res) => {
   try {
     const where =
   req.user.role === "ADMIN"
-    ? { isAdminDeleted: false }
-    : { userId: req.user.id, isEmployeeDeleted: false };
+    ? { isAdminDeleted: false,
+      user: { isActive: true } 
+     }
+    : { userId: req.user.id, 
+      isEmployeeDeleted: false,
+      user: { isActive: true }  };
 
     const leaves = await prisma.leave.findMany({
       where,
@@ -348,6 +373,12 @@ if (
   });
 }
 
+if (!leave.user?.isActive) {
+  return res.status(404).json({
+    success: false,
+    message: "Leave not found",
+  });
+}
 
     if (req.user.role !== "ADMIN" && leave.userId !== req.user.id) {
       return res.status(403).json({ success: false, message: "Access denied" });
@@ -373,7 +404,14 @@ export const updateLeave = async (req, res) => {
     const id = req.params.id;
     const input = req.body;
 
-    const leave = await prisma.leave.findUnique({ where: { id } });
+    const leave = await prisma.leave.findUnique({ where: { id }, include: { user: true } });
+
+    if (!leave || !leave.user.isActive) {
+  return res.status(404).json({
+    success: false,
+    message: "Leave not found",
+  });
+}
 
     if (!leave)
       return res.status(404).json({ success: false, message: "Leave not found" });
@@ -542,6 +580,13 @@ export const approveLeave = async (req, res) => {
     });
 
     if (!leave) return res.status(404).json({ success: false, message: "Leave not found" });
+    
+      if (!leave.user.isActive) {
+  return res.status(400).json({
+    success: false,
+    message: "Cannot process leave for deactivated employee",
+  });
+}
 
     // ❌ Self approval block
     if (leave.userId === managerId)
@@ -707,7 +752,14 @@ export const deleteLeave = async (req, res) => {
   try {
     const id = req.params.id;
 
-    const leave = await prisma.leave.findUnique({ where: { id } });
+    const leave = await prisma.leave.findUnique({ where: { id }, include: { user: true } });
+
+    if (!leave.user.isActive && req.user.role !== "ADMIN") {
+  return res.status(403).json({
+    success: false,
+    message: "Account deactivated",
+  });
+}
 
     if (!leave)
       return res.status(404).json({ success:false, message:"Leave not found" });

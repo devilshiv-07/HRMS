@@ -90,7 +90,9 @@ const deptStats = await Promise.all(
   const { start, end } = getTodayRange();
 
   const todayAttendance = await prisma.attendance.findMany({
-    where: { date: { gte: start, lte: end } },
+    where: { date: { gte: start, lte: end },
+      user: { isActive: true }
+   },
     include: { user: true }
   });
 
@@ -135,7 +137,9 @@ const lyfEmployees = await countActiveEmployees({
   last7.setDate(now.getDate() - 7);
 
   const attendanceTrend = await prisma.attendance.findMany({
-    where: { date: { gte: last7, lte: now } },
+    where: { date: { gte: last7, lte: now },
+    user: { isActive: true }
+   },
     include: { user: true },
     orderBy: { date: "asc" }
   });
@@ -148,7 +152,8 @@ const lyfEmployees = await countActiveEmployees({
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
   const leavesTrend = await prisma.leave.findMany({
-    where: { startDate: { gte: monthStart } },
+    where: { startDate: { gte: monthStart },
+  user: { isActive: true } },
     include: { user: true }
   });
 
@@ -160,7 +165,8 @@ const lyfEmployees = await countActiveEmployees({
   const leavesToday = await prisma.leave.findMany({
     where: {
       startDate: { lte: end },
-      endDate: { gte: start }
+      endDate: { gte: start },
+      user: { isActive: true }
     },
     include: { user: true }
   });
@@ -209,6 +215,12 @@ const lyfEmployees = await countActiveEmployees({
  /* =====================================================
        🔥 EMPLOYEE DASHBOARD — FINAL (MATCHES LEAVE CONTROLLER)
     ====================================================== */
+if (!user.isActive) {
+  return res.status(403).json({
+    success: false,
+    message: "Account deactivated"
+  });
+}
 
     const uid = user.id;
 

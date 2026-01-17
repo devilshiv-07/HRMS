@@ -12,6 +12,11 @@ export const listNotifications = async (req, res) => {
     if (user.role === "ADMIN") {
       // Admin can view all notifications
       notifications = await prisma.notification.findMany({
+          where: {
+    user: {
+      isActive: true        // 🔥 BLOCK soft-deleted employees
+    }
+  },
         orderBy: { createdAt: "desc" },
         include: {
           user: { select: { id: true, firstName: true, lastName: true, role: true } }
@@ -20,6 +25,7 @@ export const listNotifications = async (req, res) => {
 
       // Fetch all user names ONCE for mapping readByIds
       const allUsers = await prisma.user.findMany({
+        where: { isActive: true }, 
         select: { id: true, firstName: true, lastName: true }
       });
 
@@ -32,7 +38,7 @@ export const listNotifications = async (req, res) => {
     } else {
       // Employee → only their own notifications
       notifications = await prisma.notification.findMany({
-        where: { userId: user.id },
+        where: { userId: user.id,user: { isActive: true }  },
         orderBy: { createdAt: "desc" }
       });
     }
@@ -53,8 +59,10 @@ export const getNotificationById = async (req, res) => {
     const user = req.user;
     const id = req.params.id;
 
-    let notif = await prisma.notification.findUnique({
-      where: { id },
+    let notif = await prisma.notification.findFirst({
+      where: { id,
+        user: { isActive: true } 
+       },
       include: {
         user: { select: { id: true, firstName: true, lastName: true, role: true } }
       }
@@ -68,6 +76,7 @@ export const getNotificationById = async (req, res) => {
 
     // Add readBy names
     const allUsers = await prisma.user.findMany({
+      where: { isActive: true },
       select: { id: true, firstName: true, lastName: true }
     });
 
@@ -128,7 +137,7 @@ export const createNotification = async (req, res) => {
     if (!userId)
       return res.status(400).json({ success: false, message: "userId required" });
 
-    const target = await prisma.user.findUnique({ where: { id: userId } });
+    const target = await prisma.user.findFirst({ where: { id: userId,isActive: true } });
 
     if (!target)
       return res.status(404).json({ success: false, message: "User not found" });
@@ -156,9 +165,15 @@ export const markNotificationRead = async (req, res) => {
   try {
     const user = req.user;
     const id = req.params.id;
+    if (!user.isActive) {
+  return res.status(403).json({
+    success: false,
+    message: "Account deactivated"
+  });
+}
 
-    let notif = await prisma.notification.findUnique({
-      where: { id }
+    let notif = await prisma.notification.findFirst({
+      where: { id, user: { isActive: true } }
     });
 
     if (!notif)
@@ -205,8 +220,8 @@ export const deleteNotification = async (req, res) => {
     const user = req.user;
     const id = req.params.id;
 
-    const notif = await prisma.notification.findUnique({
-      where: { id }
+    const notif = await prisma.notification.findFirst({
+      where: { id,  user: { isActive: true } }
     });
 
     if (!notif)

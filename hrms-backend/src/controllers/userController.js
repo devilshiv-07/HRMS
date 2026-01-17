@@ -9,8 +9,10 @@ const TOTAL_YEARLY_LEAVES = 21;
 ============================================================ */
 export const getMe = async (req, res) => {
   try {
-    let user = await prisma.user.findUnique({
-      where: { id: req.user.id },
+    let user = await prisma.user.findFirst({
+      where: { id: req.user.id,
+           isActive: true,
+       },
       select: {
         id: true,
         email: true,
@@ -49,9 +51,9 @@ export const getMe = async (req, res) => {
     });
 
     if (!user) {
-      return res.status(404).json({
+      return res.status(403).json({
         success: false,
-        message: "User not found",
+        message: "Account deactivated. Contact admin.",
       });
     }
 
@@ -60,8 +62,10 @@ export const getMe = async (req, res) => {
 
     // 🔄 re-fetch if credit happened
     if (credited > 0) {
-      user = await prisma.user.findUnique({
-        where: { id: req.user.id },
+      user = await prisma.user.findFirst({
+        where: { id: req.user.id,
+               isActive: true,
+        },
         select: {
           id: true,
           email: true,
@@ -122,12 +126,27 @@ export const getMe = async (req, res) => {
    UPDATE *MY* PROFILE (PROFILE PAGE SAFE ENDPOINT)
 ============================================================ */
 export const updateMyProfile = async (req, res) => {
+const userId = req.user.id;
+const activeUser = await prisma.user.findFirst({
+  where: {
+    id: userId,
+    isActive: true,
+  },
+});
+
+if (!activeUser) {
+  return res.status(403).json({
+    success: false,
+    message: "Account is deactivated",
+  });
+}
+
   try {
     const userId = req.user.id;
     const { firstName, lastName, position } = req.body;
 
     const updated = await prisma.user.update({
-      where: { id: userId },
+      where: { id: userId},
       data: {
         firstName,
         lastName,
@@ -382,12 +401,20 @@ export const updateUser = async (req, res) => {
       where: { id: targetId },
     });
 
-    if (!targetUser) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-      });
-    }
+if (!targetUser) {
+  return res.status(404).json({
+    success: false,
+    message: "User not found",
+  });
+}
+
+if (!targetUser.isActive) {
+  return res.status(400).json({
+    success: false,
+    message: "Cannot update deactivated user",
+  });
+}
+
 
     /* ====================================================
        🔐 PERMISSION RULES
@@ -526,8 +553,10 @@ export const getUserFullDetails = async (req, res) => {
   try {
     const { id } = req.params;
 
-    let user = await prisma.user.findUnique({
-      where: { id },
+    let user = await prisma.user.findFirst({
+      where: { id,
+           isActive: true,
+       },
       include: {
         department: true,
         departments: {
@@ -556,8 +585,10 @@ leaves: {
 
     // 🔄 re-fetch if credit happened
     if (credited > 0) {
-      user = await prisma.user.findUnique({
-        where: { id },
+      user = await prisma.user.findFirst({
+        where: { id,
+             isActive: true,
+         },
         include: {
           department: true,
           departments: {
@@ -686,6 +717,10 @@ export const deleteUser = async (req, res) => {
         email: `inactive_${Date.now()}_${user.email}`, // 🔐 avoid unique conflict
       },
     });
+
+await prisma.refreshToken.deleteMany({
+  where: { userId: targetId },
+});
 
     return res.json({
       success: true,

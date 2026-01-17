@@ -50,6 +50,7 @@ export const managerLeaves = async (req, res) => {
     const leaves = await prisma.leave.findMany({
       where: {
         user: {
+          isActive: true, 
           departments: {
             some: {
               departmentId: { in: deptIds },
@@ -86,6 +87,7 @@ export const managerReimbursements = async (req, res) => {
       where: {
         isAdminDeleted: false,
         user: {
+          isActive: true, 
           departments: {
             some: {
               departmentId: { in: deptIds },
@@ -260,6 +262,7 @@ export const managerAttendance = async (req, res) => {
     const records = await prisma.attendance.findMany({
       where: {
         user: {
+          isActive: true,
           departments: {
             some: {
               departmentId: { in: deptIds },
@@ -295,6 +298,7 @@ export const managerNotifications = async (req, res) => {
     // 1️⃣ Manager ke departments
     const depts = await prisma.department.findMany({
       where: {
+        isActive: true,
         managers: {
           some: { id: managerId },
         },
@@ -307,6 +311,7 @@ export const managerNotifications = async (req, res) => {
     // 2️⃣ Employees of those departments
     const employees = await prisma.user.findMany({
       where: {
+        isActive: true,
         departments: {
           some: { departmentId: { in: deptIds } },
         },

@@ -98,6 +98,11 @@ export default function Employees() {
 const submit = async (e) => {
   e.preventDefault();
   setErrorMsg("");
+    // Frontend validation
+  if (!editUser && !form.password.trim()) {
+    setErrorMsg("Password is required for new employee");
+    return;
+  }
   setSaveLoading(true);     // 🔥 start loader
 
   try {
@@ -520,6 +525,7 @@ function UserForm({ form, setForm, submit, close, editUser, errorMsg, me, depart
       placeholder={editUser ? "New password (optional)" : "Password"}
       value={form.password}
       onChange={(e) => update("password", e.target.value)}
+      required={!editUser}   // 🔥 ADD MODE → required, EDIT MODE → optional
     />
 
     <button
