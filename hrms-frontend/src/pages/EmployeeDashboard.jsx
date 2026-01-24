@@ -72,6 +72,14 @@ attMap[iso] = {
   a.status === "CASUAL" ||
   a.status === "UNPAID",
   halfDay: a.status === "HALF_DAY",
+  holiday: a.status === "HOLIDAY",
+  
+  weekOff:
+    a.status === "WEEKOFF" ||
+    a.status === "WEEK_OFF",
+
+  weekOffPresent:
+    a.status === "WEEKOFF_PRESENT",
 };
   });
 
@@ -119,6 +127,9 @@ attMap[iso] = {
           else if (c.wfh) clsLight = "bg-blue-200/40 border-blue-500 text-blue-700";
           else if (c.halfDay) clsLight = "bg-purple-200/40 border-purple-500 text-purple-700";
           else if (c.compOff) clsLight = "bg-amber-200/40 border-amber-500 text-amber-700";
+          else if (c.weekOffPresent) clsLight = "bg-gray-400/50 border-gray-600 text-gray-800";
+          else if (c.weekOff) clsLight = "bg-orange-200/50 border-orange-500 text-orange-700";
+          else if (c.holiday) clsLight = "bg-gradient-to-br from-yellow-200 via-yellow-200 to-orange-200 " + "border-orange-500 text-orange-800";
           else if (c.leave) clsLight = "bg-yellow-200/40 border-yellow-500 text-yellow-700";
           else if (c.isFuture) clsLight = "bg-gray-300/30 border-gray-400 text-gray-500";
           else clsLight = "bg-red-200/40 border-red-500 text-red-700";
@@ -128,6 +139,13 @@ attMap[iso] = {
 else if (c.halfDay) clsDark = "dark:bg-purple-700 dark:border-purple-400 dark:text-purple-100";
 else if (c.compOff) clsDark = "dark:bg-amber-700 dark:border-amber-400 dark:text-amber-100";
 else if (c.wfh) clsDark = "dark:bg-blue-700 dark:border-blue-400 dark:text-blue-100";
+else if (c.weekOffPresent) clsDark = "dark:bg-gray-800 dark:border-gray-500 dark:text-gray-100";
+else if (c.weekOff) clsDark = "dark:bg-orange-700 dark:border-orange-400 dark:text-orange-100";
+else if (c.holiday)
+  clsDark =
+    "dark:bg-gradient-to-br dark:from-yellow-600 dark:via-orange-400 dark:to-orange-600 " +
+    "dark:border-orange-400 dark:text-orange-100";
+
 else if (c.leave) clsDark = "dark:bg-yellow-700 dark:border-yellow-400 dark:text-yellow-100";
 else if (c.isFuture) clsDark = "dark:bg-gray-700 dark:border-gray-500 dark:text-gray-300";
 else clsDark = "dark:bg-red-700 dark:border-red-400 dark:text-red-100";
@@ -263,6 +281,11 @@ case "UNPAID":
     case "COMP_OFF":
       months[m].compOff += 1;
       break;
+
+      case "HOLIDAY":
+case "WEEKOFF":
+case "WEEKOFF_PRESENT":
+  break;
 
     default:
       break; // WEEKOFF / ABSENT ignored
