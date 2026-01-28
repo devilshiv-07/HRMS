@@ -92,24 +92,24 @@ function getUniqueLeaveDays(leaves) {
 }
 
 // --- Calculate unique leave units (handles half days) ---
-function getUniqueLeaveUnits(leaves) {
-  const dayMap = {}; // { "2025-09-10": 1 | 0.5 }
+// function getUniqueLeaveUnits(leaves) {
+//   const dayMap = {}; // { "2025-09-10": 1 | 0.5 }
 
-  leaves.forEach((l) => {
-    let cur = new Date(l.startDate);
-    const end = new Date(l.endDate);
+//   leaves.forEach((l) => {
+//     let cur = new Date(l.startDate);
+//     const end = new Date(l.endDate);
 
-    const value = l.type === "HALF_DAY" ? 0.5 : 1;
+//     const value = l.type === "HALF_DAY" ? 0.5 : 1;
 
-    while (cur <= end) {
-      const iso = cur.toISOString().slice(0, 10);
-      // Same date → max value wins
-      dayMap[iso] = Math.max(dayMap[iso] || 0, value);
-      cur.setDate(cur.getDate() + 1);
-    }
-  });
-  return Object.values(dayMap).reduce((a, b) => a + b, 0);
-}
+//     while (cur <= end) {
+//       const iso = cur.toISOString().slice(0, 10);
+//       // Same date → max value wins
+//       dayMap[iso] = Math.max(dayMap[iso] || 0, value);
+//       cur.setDate(cur.getDate() + 1);
+//     }
+//   });
+//   return Object.values(dayMap).reduce((a, b) => a + b, 0);
+// }
 
 export default function Leaves() {
   const [leaves, setLeaves] = useState([]);
@@ -128,11 +128,8 @@ export default function Leaves() {
   const [msgType, setMsgType] = useState("success");
   const [loading, setLoading] = useState(true);
   const [applied, setApplied] = useState(false);
-  const [todayApplied, setTodayApplied] = useState(false);
   const [applyMessage, setApplyMessage] = useState("");
-  const [todayApplyMessage, setTodayApplyMessage] = useState("");
   const [applyLoading, setApplyLoading] = useState(false);
-  const [todayLoading, setTodayLoading] = useState(false);
   const [showDelete, setShowDelete] = useState(false);
   const [deleteId, setDeleteId] = useState(null);
 
@@ -155,11 +152,15 @@ export default function Leaves() {
     responsiblePerson: "",
   });
 
-  const [showTodayPopup, setShowTodayPopup] = useState(false);
-  const [todayForm, setTodayForm] = useState({
-    type: "CASUAL",
+  // const [showTodayPopup, setShowTodayPopup] = useState(false);
+  const [formMode, setFormMode] = useState("LEAVE"); // LEAVE | CANCEL
+  // Today‑leave quick modal is removed per latest requirement
+  const [cancelForm, setCancelForm] = useState({
+    date: "",
+    checkInTime: "",
+    checkOutTime: "",
+    witnessId: "",
     reason: "",
-    responsiblePerson: "",
   });
 
   const user = useAuthStore((s) => s.user);
@@ -169,17 +170,13 @@ export default function Leaves() {
   const yearStart = `${currentYear}-01-01`;
   const yearEnd = `${currentYear}-12-31`;
 
-  const getDays = (l) => {
-    if (!l?.startDate || !l?.endDate) return 0;
-    const s = new Date(l.startDate);
-    const e = new Date(l.endDate);
-    return Math.floor((e - s) / (1000 * 60 * 60 * 24)) + 1;
-  };
+  // const getDays = (l) => {
+  //   if (!l?.startDate || !l?.endDate) return 0;
+  //   const s = new Date(l.startDate);
+  //   const e = new Date(l.endDate);
+  //   return Math.floor((e - s) / (1000 * 60 * 60 * 24)) + 1;
+  // };
 
-  const getLeaveUnits = (l) => {
-    if (l.type === "HALF_DAY") return 0.5;
-    return getDays(l);
-  };
 const confirmDeleteLeave = async () => {
   try {
     await api.delete(`/leaves/${deleteId}`);
@@ -210,25 +207,6 @@ const approvedLeaveDays = React.useMemo(() => {
   );
 }, [leaves, holidaysList, weekOff]);
 
-  // ⭐ Applied leave days (all leaves excluding WFH)
-  const appliedLeaveDays = getUniqueLeaveUnits(
-    leaves.filter(
-      (l) =>
-        l.type !== "WFH" &&
-        new Date(l.startDate) >= new Date(yearStart) &&
-        new Date(l.endDate) <= new Date(yearEnd)
-    )
-  );
-
-  // ⭐ WFH unique days (all WFH)
-  const totalWFHDays = getUniqueLeaveDays(
-    leaves.filter(
-      (l) =>
-        l.type?.toUpperCase() === "WFH" &&
-        new Date(l.startDate) >= new Date(yearStart) &&
-        new Date(l.endDate) <= new Date(yearEnd)
-    )
-  );
 
   // ⭐ Approved WFH unique days
   const approvedWFHDays = getUniqueLeaveDays(
@@ -241,13 +219,6 @@ const approvedLeaveDays = React.useMemo(() => {
     )
   );
 
-  // ⭐ Total half day applied (count)
-  const totalAppliedHalfDay = leaves.filter(
-    (l) =>
-      l.type === "HALF_DAY" &&
-      new Date(l.startDate) >= new Date(yearStart) &&
-      new Date(l.endDate) <= new Date(yearEnd)
-  ).length;
 
   // ⭐ Approved half day (count)
   const approvedHalfDay = leaves.filter(
@@ -302,23 +273,17 @@ useEffect(() => {
   useAuthStore.getState().refreshUser();
 }, []);
 
-  useEffect(() => {
-    if (!msg) return;
-    const t = setTimeout(() => setMsg(""), 3000);
-    return () => clearTimeout(t);
-  }, [msg]);
+useEffect(() => {
+  if (!msg) return;
+  const t = setTimeout(() => setMsg(""), 3000);
+  return () => clearTimeout(t);
+}, [msg]);
 
-  useEffect(() => {
-    if (!applyMessage) return;
-    const t = setTimeout(() => setApplyMessage(""), 3000);
-    return () => clearTimeout(t);
-  }, [applyMessage]);
-
-  useEffect(() => {
-    if (!todayApplyMessage) return;
-    const t = setTimeout(() => setTodayApplyMessage(""), 3000);
-    return () => clearTimeout(t);
-  }, [todayApplyMessage]);
+useEffect(() => {
+  if (!applyMessage) return;
+  const t = setTimeout(() => setApplyMessage(""), 3000);
+  return () => clearTimeout(t);
+}, [applyMessage]);
 
   const load = async () => {
     try {
@@ -331,7 +296,8 @@ useEffect(() => {
       } catch (e) {
         console.error("Failed to load employees:", e);
       }
-    } catch (err) {
+    } catch (error) {
+      console.error("Failed to load leaves:", error);
       setMsg("Failed to load leaves");
       setMsgType("error");
     }
@@ -431,82 +397,6 @@ if (days === 1) {
   }
 };
 
-  const submitTodayLeave = async () => {
-    setTodayLoading(true);  
-    const today = new Date().toISOString().slice(0, 10);
-
-// 🚫 BLOCK if today is holiday or weekoff
-const todayCheck = checkHolidayOrWeekOff(today, holidaysList, weekOff);
-
-if (todayCheck.blocked) {
-  const message =
-    todayCheck.reason === "HOLIDAY"
-      ? "Today is a Holiday. Leave cannot be applied."
-      : "Today is a Week-Off. Leave cannot be applied.";
-
-  setTodayApplyMessage(message);
-  setMsg(message);
-  setMsgType("error");   // 🔴 red color
-  setTodayLoading(false);
-  return;
-}
-
-    if (todayForm.type === "WFH" && !todayForm.reason.trim()) {
-  setTodayApplyMessage("Reason is mandatory for Work From Home");
-  setMsg("Reason is mandatory for Work From Home");
-  setMsgType("error");
-  setTodayLoading(false);
-  return;
-}
-    // ⭐ Block if comp-off balance is zero
-    if (todayForm.type === "COMP_OFF" && (user?.compOffBalance ?? 0) <= 0) {
-       setMsg("You don't have Comp-Off balance");
-       setMsgType("error");
-       setTodayApplyMessage("Not enough Comp-Off balance");
-       setTodayLoading(false); 
-       return;
-    }
-    
-
-    try {
-      await api.post("/leaves", {
-        type: todayForm.type,
-        startDate: today,
-        endDate: today,
-        reason: todayForm.reason || "Taking leave today",
-        responsiblePerson: todayForm.responsiblePerson || null,
-      });
-
-      setTodayApplyMessage("Your leave is successfully sent.");
-      setMsg("Your leave is successfully sent. Please wait for approval.");
-      setMsgType("success");
-
-      setTodayForm({ type: "CASUAL", reason: "", responsiblePerson: "" });
-
-      setTodayApplied(true);
-
-      // ⭐ Auto reset + auto close popup after 2 sec
-      setTimeout(() => {
-        setTodayApplied(false);
-        setTodayApplyMessage("");
-        setShowTodayPopup(false);
-      }, 2000);
-
-      load();
-    } catch (err) {
-      const errorMsg = err.response?.data?.message || "Failed to apply leave";
-      setTodayApplyMessage(errorMsg);
-      setMsg(errorMsg);
-      setMsgType("error");
-      
-      setTimeout(() => {
-        setTodayApplyMessage("");
-      }, 3000);
-    }finally {
-    setTodayLoading(false);   // << stop loading
-  }
-  };
-
 const updateStatus = async (id, status) => {
   try {
     // ✅ OPTIMISTIC UPDATE (instant UI change)
@@ -567,101 +457,287 @@ const updateStatus = async (id, status) => {
 
       {!isAdmin && (
         <GlassCard>
-          <div className="flex justify-between items-center mb-4">
-            <h3 className="text-xl font-semibold">Apply for Leave/WFH</h3>
-            <button onClick={() => setShowTodayPopup(true)} className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white shadow">
-              Apply Today Leave/WFH
-            </button>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="flex flex-col gap-1">
-              <label className="font-medium text-gray-600">Leave Type</label>
-              <select
-                className="p-3 rounded-xl border dark:bg-gray-900 shadow"
-                value={form.type}
-                onChange={(e) => setForm({ ...form, type: e.target.value })}
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
+            <h3 className="text-xl font-semibold">
+              {formMode === "LEAVE"
+                ? "Apply for Leave/WFH"
+                : "Cancel Leave (Missed Check-in)"}
+            </h3>
+            <div className="flex flex-wrap gap-3">
+              {/* Top buttons only switch between forms */}
+              <button
+                onClick={() => setFormMode("LEAVE")}
+                className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white shadow text-sm md:text-base"
               >
-                <option value="CASUAL">Casual Leave</option>
-                <option value="SICK">Sick Leave</option>
-                <option value="PAID">Paid Leave</option>
-                <option value="UNPAID">Unpaid Leave</option>
-                 <option value="COMP_OFF">Comp Off</option>
-                <option value="HALF_DAY">Half Day</option>
-                <option value="WFH">Work From Home</option>
-              </select>
-            </div>
-            <div className="flex flex-col gap-1">
-              <label className="font-medium text-gray-600">Start Date</label>
-              <input
-                type="date"
-                className="p-3 rounded-xl border dark:bg-gray-900 shadow"
-                value={form.startDate}
-                onChange={(e) => setForm({ ...form, startDate: e.target.value })}
-              />
-            </div>
-            <div className="flex flex-col gap-1">
-              <label className="font-medium text-gray-600">End Date</label>
-              <input type="date" className="p-3 rounded-xl border dark:bg-gray-900 shadow" value={form.endDate} onChange={(e) => setForm({ ...form, endDate: e.target.value })} />
+                Apply Leave
+              </button>
+              <button
+                onClick={() => setFormMode("CANCEL")}
+                className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white shadow text-sm md:text-base"
+              >
+                Cancel Leave
+              </button>
             </div>
           </div>
-          <div className="mt-4">
-<label className="font-medium text-gray-600">
-  Reason{" "}
-  {(form.type === "WFH" || calcLeaveDays(form.startDate, form.endDate) >= 3) && (
-    <span className="text-red-500">*</span>
-  )}
-</label>
 
-            <textarea
-              rows={3}
-                placeholder={
-    form.type === "WFH"
-      ? "Reason is required for Work From Home"
-      : calcLeaveDays(form.startDate, form.endDate) >= 3
-      ? "Reason is required beyond three days leave"
-      : "Enter reason (optional)"
-  }
-              className="p-3 w-full rounded-xl border dark:bg-gray-900 shadow"
-              value={form.reason}
-              onChange={(e) => setForm({ ...form, reason: e.target.value })}
-            />
-          </div>
-          <div className="mt-4">
-            <label className="font-medium text-gray-600">
-              Who takes your responsibility? (optional)
-            </label>
-            <EmployeeDropdown
-              employees={employees}
-              value={form.responsiblePerson}
-              onChange={(val) => setForm({ ...form, responsiblePerson: val })}
-            />
-          </div>
+          {formMode === "LEAVE" ? (
+            <>
+              {/* Apply Leave form */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="flex flex-col gap-1">
+                  <label className="font-medium text-gray-600">
+                    Leave Type
+                  </label>
+                  <select
+                    className="p-3 rounded-xl border dark:bg-gray-900 shadow"
+                    value={form.type}
+                    onChange={(e) =>
+                      setForm({ ...form, type: e.target.value })
+                    }
+                  >
+                    <option value="CASUAL">Casual Leave</option>
+                    <option value="SICK">Sick Leave</option>
+                    <option value="PAID">Paid Leave</option>
+                    <option value="UNPAID">Unpaid Leave</option>
+                    <option value="COMP_OFF">Comp Off</option>
+                    <option value="HALF_DAY">Half Day</option>
+                    <option value="WFH">Work From Home</option>
+                  </select>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="font-medium text-gray-600">
+                    Start Date
+                  </label>
+                  <input
+                    type="date"
+                    className="p-3 rounded-xl border dark:bg-gray-900 shadow"
+                    value={form.startDate}
+                    onChange={(e) =>
+                      setForm({ ...form, startDate: e.target.value })
+                    }
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="font-medium text-gray-600">
+                    End Date
+                  </label>
+                  <input
+                    type="date"
+                    className="p-3 rounded-xl border dark:bg-gray-900 shadow"
+                    value={form.endDate}
+                    onChange={(e) =>
+                      setForm({ ...form, endDate: e.target.value })
+                    }
+                  />
+                </div>
+              </div>
+
+              <div className="mt-4">
+                <label className="font-medium text-gray-600">
+                  Reason{" "}
+                  {(form.type === "WFH" ||
+                    calcLeaveDays(form.startDate, form.endDate) >= 3) && (
+                    <span className="text-red-500">*</span>
+                  )}
+                </label>
+
+                <textarea
+                  rows={3}
+                  placeholder={
+                    form.type === "WFH"
+                      ? "Reason is required for Work From Home"
+                      : calcLeaveDays(form.startDate, form.endDate) >= 3
+                      ? "Reason is required beyond three days leave"
+                      : "Enter reason (optional)"
+                  }
+                  className="p-3 w-full rounded-xl border dark:bg-gray-900 shadow"
+                  value={form.reason}
+                  onChange={(e) =>
+                    setForm({ ...form, reason: e.target.value })
+                  }
+                />
+              </div>
+
+              <div className="mt-4">
+                <label className="font-medium text-gray-600">
+                  Who takes your responsibility? (optional)
+                </label>
+                <EmployeeDropdown
+                  employees={employees}
+                  value={form.responsiblePerson}
+                  onChange={(val) =>
+                    setForm({ ...form, responsiblePerson: val })
+                  }
+                />
+              </div>
+            </>
+          ) : (
+            <>
+              {/* Cancel Leave form, mirroring the structure of Apply Leave */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="flex flex-col gap-1">
+                  <label className="font-medium text-gray-600">
+                    Date of Leave <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="date"
+                    className="p-3 rounded-xl border dark:bg-gray-900 shadow"
+                    value={cancelForm.date}
+                    onChange={(e) =>
+                      setCancelForm((f) => ({ ...f, date: e.target.value }))
+                    }
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="font-medium text-gray-600">
+                    Check-in Time <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="time"
+                    className="p-3 rounded-xl border dark:bg-gray-900 shadow"
+                    value={cancelForm.checkInTime}
+                    onChange={(e) =>
+                      setCancelForm((f) => ({
+                        ...f,
+                        checkInTime: e.target.value,
+                      }))
+                    }
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="font-medium text-gray-600">
+                    Check-out Time <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="time"
+                    className="p-3 rounded-xl border dark:bg-gray-900 shadow"
+                    value={cancelForm.checkOutTime}
+                    onChange={(e) =>
+                      setCancelForm((f) => ({
+                        ...f,
+                        checkOutTime: e.target.value,
+                      }))
+                    }
+                  />
+                </div>
+              </div>
+
+              <div className="mt-4">
+                <label className="font-medium text-gray-600 text-sm">
+                  Witness (employee / admin who saw you in office){" "}
+                  <span className="text-red-500">*</span>
+                </label>
+                <EmployeeDropdown
+                  employees={employees}
+                  value={cancelForm.witnessId}
+                  onChange={(val) =>
+                    setCancelForm((f) => ({ ...f, witnessId: val }))
+                  }
+                />
+              </div>
+
+              <div className="mt-4">
+                <label className="font-medium text-gray-600 text-sm">
+                  Reason / Additional Details
+                </label>
+                <textarea
+                  rows={3}
+                  className="p-3 w-full rounded-xl border dark:bg-gray-900 shadow"
+                  placeholder="Explain why you missed check-in (optional)"
+                  value={cancelForm.reason}
+                  onChange={(e) =>
+                    setCancelForm((f) => ({
+                      ...f,
+                      reason: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+            </>
+          )}
+
           <div className="flex items-center gap-3 mt-6">
-       <button
-  onClick={apply}
-  disabled={applyLoading || applied}
-  className={`px-6 py-3 rounded-xl font-semibold shadow-lg text-white
-    ${applied ? "bg-green-600 cursor-default" :
+            <button
+              onClick={
+                formMode === "LEAVE"
+                  ? apply
+                  : async () => {
+                      try {
+                        if (
+                          !cancelForm.date ||
+                          !cancelForm.checkInTime ||
+                          !cancelForm.checkOutTime ||
+                          !cancelForm.witnessId
+                        ) {
+                          setMsg(
+                            "Date, times and witness are required for Cancel Leave"
+                          );
+                          setMsgType("error");
+                          return;
+                        }
+                        await api.post("/attendance-corrections/request", {
+                          date: cancelForm.date,
+                          checkInTime: cancelForm.checkInTime,
+                          checkOutTime: cancelForm.checkOutTime,
+                          witnessId: cancelForm.witnessId,
+                          reason:
+                            cancelForm.reason ||
+                            "Missed to check-in, present in office",
+                        });
+                        setMsg(
+                          "Cancel leave request submitted for approval"
+                        );
+                        setMsgType("success");
+                        setCancelForm({
+                          date: "",
+                          checkInTime: "",
+                          checkOutTime: "",
+                          witnessId: "",
+                          reason: "",
+                        });
+                        setFormMode("LEAVE");
+                      } catch (err) {
+                        const errorMsg =
+                          err?.response?.data?.message ||
+                          "Failed to submit cancel leave request";
+                        setMsg(errorMsg);
+                        setMsgType("error");
+                      }
+                    }
+              }
+              disabled={applyLoading || applied}
+              className={`px-6 py-3 rounded-xl font-semibold shadow-lg text-white
+    ${applied && formMode === "LEAVE" ? "bg-green-600 cursor-default" :
      applyLoading ? "bg-indigo-400 cursor-wait" :
      "bg-indigo-600 hover:bg-indigo-700"}
   `}
->
-  {applied ? "Applied ✔" : applyLoading ? "Applying..." : "Apply"}
-</button>
+            >
+              {formMode === "LEAVE"
+                ? applied
+                  ? "Applied ✔"
+                  : applyLoading
+                  ? "Applying..."
+                  : "Apply"
+                : "Submit Cancel Request"}
+            </button>
 
-            {applyMessage && (
-              <span className={`text-sm font-medium ${
-                applyMessage.includes("already") || 
-                applyMessage.includes("Failed") || 
-                applyMessage.includes("Error") ||
-                applyMessage.includes("Half day leave must be for a single date")||
-                applyMessage.includes("Not enough Comp-Off balance") ||
-                applyMessage.includes("Holiday") ||
-                applyMessage.includes("Week-Off")||
-                applyMessage.includes("don't have Comp-Off balance")
-                  ? "text-red-600"
-                  : "text-green-600"
-              }`}>
+            {applyMessage && formMode === "LEAVE" && (
+              <span
+                className={`text-sm font-medium ${
+                  applyMessage.includes("already") ||
+                  applyMessage.includes("Failed") ||
+                  applyMessage.includes("Error") ||
+                  applyMessage.includes(
+                    "Half day leave must be for a single date"
+                  ) ||
+                  applyMessage.includes("Not enough Comp-Off balance") ||
+                  applyMessage.includes("Holiday") ||
+                  applyMessage.includes("Week-Off") ||
+                  applyMessage.includes("don't have Comp-Off balance")
+                    ? "text-red-600"
+                    : "text-green-600"
+                }`}
+              >
                 {applyMessage}
               </span>
             )}
@@ -731,131 +807,13 @@ const updateStatus = async (id, status) => {
   />
 )}
 
-      {showTodayPopup && (
-  <TodayPopup
-  todayForm={todayForm}
-  setTodayForm={setTodayForm}
-  close={() => setShowTodayPopup(false)}
-  submit={submitTodayLeave}
-  employees={employees}
-  todayApplied={todayApplied}
-  todayApplyMessage={todayApplyMessage}
-  todayLoading={todayLoading}      // <<< required
-/>
+      {/* Today‑leave modal removed as per latest requirement */}
 
-      )}
     </div>
   );
 }
 
-function TodayPopup({
-  todayForm,
-  setTodayForm,
-  close,
-  submit,
-  employees,
-  todayApplied,
-  todayApplyMessage,
-  todayLoading,        // <<< required
-}) {
-  return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center backdrop-blur-sm z-50 p-4">
-      <div className="bg-white dark:bg-gray-900 p-6 rounded-2xl max-w-md w-full shadow-xl border border-gray-300 dark:border-gray-700">
-        <h2 className="text-xl font-semibold mb-4">
-          Apply Today Leave or WFH
-        </h2>
-
-        {/* Leave Type */}
-        <label className="font-medium text-gray-600">Leave Type</label>
-        <select
-          className="p-3 w-full rounded-xl border dark:bg-gray-800 mt-1 mb-3"
-          value={todayForm.type}
-          onChange={(e) =>
-            setTodayForm({ ...todayForm, type: e.target.value })
-          }
-        >
-          <option value="CASUAL">Casual Leave</option>
-          <option value="SICK">Sick Leave</option>
-          <option value="PAID">Paid Leave</option>
-          <option value="UNPAID">Unpaid Leave</option>
-          <option value="COMP_OFF">Comp Off</option>
-          <option value="HALF_DAY">Half Day</option>
-          <option value="WFH">Work From Home</option>
-        </select>
-
-        {/* Reason */}
-        <label className="font-medium text-gray-600">Reason</label>
-        <textarea
-          className="p-3 w-full rounded-xl border dark:bg-gray-800 mt-1 mb-3"
-          rows={3}
-          value={todayForm.reason}
-          placeholder="Enter Reason..."
-          onChange={(e) =>
-            setTodayForm({ ...todayForm, reason: e.target.value })
-          }
-        ></textarea>
-
-        {/* Responsible Person */}
-        <label className="font-medium text-gray-600 mt-2">
-          Who takes your responsibility? (optional)
-        </label>
-        <EmployeeDropdown
-          employees={employees}
-          value={todayForm.responsiblePerson}
-          onChange={(val) =>
-            setTodayForm({ ...todayForm, responsiblePerson: val })
-          }
-        />
-
-        {/* Buttons Section */}
-        <div className="flex items-center mt-6">
-          {/* Cancel Button */}
-          <button
-            className="px-4 py-2 bg-gray-300 dark:bg-gray-700 rounded-xl hover:bg-gray-400 dark:hover:bg-gray-600"
-            onClick={close}
-          >
-            Cancel
-          </button>
-
-          {/* Submit + Message */}
-          <div className="flex items-center gap-3">
-  <button
-  disabled={todayLoading || todayApplied}
-  className={`px-4 py-2 rounded-xl text-white
-    ${todayApplied ? "bg-green-600 cursor-default" :
-     todayLoading ? "bg-indigo-400 cursor-wait" :
-     "bg-indigo-600 hover:bg-indigo-700"}
-  `}
-  onClick={submit}
->
-  {todayApplied ? "Applied ✔" : todayLoading ? "Applying..." : "Apply"}
-</button>
-
-            {todayApplyMessage && (
-              <span className={`text-sm font-medium ${
-                todayApplyMessage.includes("already") || 
-                todayApplyMessage.includes("Failed") || 
-                todayApplyMessage.includes("Error") ||
-                todayApplyMessage.includes("Half day leave must be for a single date")||
-                todayApplyMessage.includes("Holiday") ||
-                todayApplyMessage.includes("Week-Off")||
-                todayApplyMessage.includes("Not enough Comp-Off balance") ||
-                todayApplyMessage.includes("don't have Comp-Off balance")
-
-                  ? "text-red-600"
-                  : "text-green-600"
-              }`}>
-                {todayApplyMessage}
-              </span>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function LeaveItem({ l, isAdmin, updateStatus, onDelete }) {
+function LeaveItem({ l, isAdmin, onDelete }) {
   const getDays = () => {
     if (!l?.startDate || !l?.endDate) return 0;
     const s = new Date(l.startDate);

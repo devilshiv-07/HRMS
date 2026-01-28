@@ -20,7 +20,7 @@ export default function NotificationDropdown() {
       let all = r.data.notifications || [];
 
       // ---------------------------
-      // 1️⃣ ADMIN sees ALL notifications (no unread count)
+      // 1️⃣ ADMIN sees ALL notifications
       // ---------------------------
       if (user?.role === "ADMIN") {
         // Deduplicate leave-request notifications so one leave = one row
@@ -42,8 +42,9 @@ export default function NotificationDropdown() {
         }
 
         setNotes(deduped);
-        // Admin does not have per-notification "read" state
-        setUnreadCount(0);
+        // For admins, show badge as "number of current requests"
+        // (since admins don't have per-user read state)
+        setUnreadCount(deduped.length);
         return;
       }
 
@@ -130,8 +131,8 @@ export default function NotificationDropdown() {
                   key={n.id}
                   className="p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer"
                   onClick={async () => {
-                    // 1️⃣ For employees → optimistically mark as read and update badge
-                    if (user?.role !== "ADMIN" && user?.id) {
+                    // 1️⃣ Mark notification as read for this user (employee or admin)
+                    if (user?.id) {
                       const alreadyRead =
                         n.readByIds && n.readByIds.includes(user.id);
 
@@ -150,14 +151,25 @@ export default function NotificationDropdown() {
                               : item
                           );
 
-                          const unreadForUser = updated.filter(
-                            (item) =>
-                              !(
-                                item.readByIds &&
-                                item.readByIds.includes(user.id)
-                              )
-                          );
-                          setUnreadCount(unreadForUser.length);
+                          if (user.role === "ADMIN") {
+                            const unreadForAdmin = updated.filter(
+                              (item) =>
+                                !(
+                                  item.readByIds &&
+                                  item.readByIds.includes(user.id)
+                                )
+                            );
+                            setUnreadCount(unreadForAdmin.length);
+                          } else {
+                            const unreadForUser = updated.filter(
+                              (item) =>
+                                !(
+                                  item.readByIds &&
+                                  item.readByIds.includes(user.id)
+                                )
+                            );
+                            setUnreadCount(unreadForUser.length);
+                          }
 
                           return updated;
                         });
@@ -167,7 +179,6 @@ export default function NotificationDropdown() {
                           await api.patch(`/notifications/${n.id}/read`);
                         } catch (error) {
                           console.error("Failed to mark notification read:", error);
-                          // Fallback: reload from backend to correct state
                           loadNotes();
                         }
                       }

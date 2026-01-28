@@ -44,6 +44,7 @@ app.use((req, res, next) => {
 ============================================================ */
 const allowedOrigins = [
   "http://localhost:5173",
+  "http://localhost:5174",
   "https://hrms-xi-neon.vercel.app",
   "http://localhost:4000",
   "https://agilityai.in",
