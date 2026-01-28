@@ -201,19 +201,25 @@ export default function Notifications() {
 
   const finalList = isAdmin ? mergedForAdmin : notes;
 
-  /* SEARCH */
-const list = finalList.filter((n) => {
-  const matchesSearch =
-    n.title.toLowerCase().includes(filter.search.toLowerCase()) ||
-    n.body.toLowerCase().includes(filter.search.toLowerCase());
+  /* SEARCH + READ FILTERS */
+  const list = finalList.filter((n) => {
+    const matchesSearch =
+      n.title.toLowerCase().includes(filter.search.toLowerCase()) ||
+      n.body.toLowerCase().includes(filter.search.toLowerCase());
 
-  // READ FILTERS
-  if (filter.type === "READ") return n.isRead && matchesSearch;
-  if (filter.type === "UNREAD") return !n.isRead && matchesSearch;
+    // Admin has no personal read state; READ/UNREAD filters don't apply
+    if (isAdmin) return matchesSearch;
 
-  // ALL
-  return matchesSearch;
-});
+    const hasUserId = !!user?.id;
+    const isReadForUser =
+      hasUserId && n.readByIds && n.readByIds.includes(user.id);
+
+    if (filter.type === "READ") return isReadForUser && matchesSearch;
+    if (filter.type === "UNREAD") return !isReadForUser && matchesSearch;
+
+    // ALL
+    return matchesSearch;
+  });
 
   return (
     <div className="space-y-6">
@@ -350,7 +356,7 @@ const list = finalList.filter((n) => {
             <div className="flex gap-2">
 
               {/* unread dot */}
-              {!n.isRead && !isAdmin && (
+              {!isAdmin && user?.id && (!n.readByIds || !n.readByIds.includes(user.id)) && (
                 <div className="w-2 h-2 bg-blue-600 rounded-full mt-2"></div>
               )}
 
@@ -389,16 +395,14 @@ const list = finalList.filter((n) => {
             </div>
 
             {/* RIGHT BUTTONS */}
-            {!isAdmin && (
+                {!isAdmin && user?.id && (!n.readByIds || !n.readByIds.includes(user.id)) && (
               <div className="flex flex-col gap-1 ml-2">
-                {!n.isRead && (
                   <button
                     className="btn-small bg-blue-600"
                     onClick={() => markRead(n.id)}
                   >
                     Read
                   </button>
-                )}
 
                 <button
                   className="btn-small bg-red-600"

@@ -1,4 +1,5 @@
 import prisma from "../prismaClient.js";
+import { emitToUser, emitToUsers } from "../socket/socketServer.js";
 
 /* =====================================================
    LIST NOTIFICATIONS (Admin → all, Employee → own)
@@ -127,6 +128,17 @@ export const createNotification = async (req, res) => {
 
       await prisma.notification.createMany({ data: rows });
 
+      // 🔔 Socket: notify all targeted employees in real-time
+      const employeeIds = employees.map((e) => e.id);
+      if (employeeIds.length > 0) {
+        // Payload is minimal because clients will refetch from /notifications
+        emitToUsers(employeeIds, "notification_created", {
+          scope: "ALL_EMPLOYEES",
+          title,
+          body,
+        });
+      }
+
       return res.json({
         success: true,
         message: "Notification sent to all employees"
@@ -144,6 +156,13 @@ export const createNotification = async (req, res) => {
 
     const notif = await prisma.notification.create({
       data: { userId, title, body, meta: safeMeta }
+    });
+
+    // 🔔 Socket: notify the specific employee in real-time
+    emitToUser(userId, "notification_created", {
+      title,
+      body,
+      id: notif.id,
     });
 
     return res.json({

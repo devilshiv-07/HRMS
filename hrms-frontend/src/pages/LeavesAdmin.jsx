@@ -4,6 +4,7 @@ import api from "../api/axios";
 import ConfirmDelPopup from "../components/ConfirmDelPopup";
 import ConfirmRejectPopup from "../components/ConfirmRejPopup";
 import useAuthStore from "../stores/authstore";
+import { useLocation } from "react-router-dom";
 function PageTitle({ title, sub }) {
   return (
     <div>
@@ -21,7 +22,7 @@ function GlassCard({ children }) {
   );
 }
 
-function LeaveItem({ l, updateStatus, deleteLeave, openRejectPopup,approveLoadingId, rejectLoadingId, deleteLoadingId }) {
+function LeaveItem({ l, updateStatus, deleteLeave, openRejectPopup, approveLoadingId, rejectLoadingId, deleteLoadingId, highlight }) {
   const getDays = () => {
     if (!l?.startDate || !l?.endDate) return 0;
     const s = new Date(l.startDate);
@@ -36,7 +37,14 @@ function LeaveItem({ l, updateStatus, deleteLeave, openRejectPopup,approveLoadin
   };
 
   return (
-    <div className="p-5 rounded-2xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 shadow relative">
+    <div
+      id={`leave-${l.id}`}
+      className={`p-5 rounded-2xl bg-white dark:bg-gray-900 border shadow relative ${
+        highlight
+          ? "border-indigo-500 ring-2 ring-indigo-300 dark:ring-indigo-700"
+          : "border-gray-200 dark:border-gray-700"
+      }`}
+    >
       
       {/* DELETE BUTTON */}
     <button
@@ -188,6 +196,8 @@ export default function LeavesAdmin() {
     useAuthStore.getState().refreshUser();
   }, []);
 
+const location = useLocation();
+
 const load = async () => {
   setLoading(true);
 
@@ -239,6 +249,10 @@ try {
   useEffect(() => {
     load();
   }, []);
+
+  // 🔎 Optional: highlight specific leave when opened from notification
+  const searchParams = new URLSearchParams(location.search);
+  const focusLeaveId = searchParams.get("leaveId");
   useEffect(() => {
   // Auto refresh when admin switches back to tab
   const handleVisibilityChange = () => {
@@ -496,10 +510,10 @@ const submitReject = async (reason) => {
                 updateStatus={updateStatus}
                 deleteLeave={deleteLeave}
                 openRejectPopup={openRejectPopup}
-                
-                approveLoadingId={approveLoadingId}   // ADD THIS
-                rejectLoadingId={rejectLoadingId}   
-                deleteLoadingId={deleteLoadingId}   // ADD THIS
+                approveLoadingId={approveLoadingId}
+                rejectLoadingId={rejectLoadingId}
+                deleteLoadingId={deleteLoadingId}
+                highlight={focusLeaveId === l.id}
               />
             ))}
           </div>

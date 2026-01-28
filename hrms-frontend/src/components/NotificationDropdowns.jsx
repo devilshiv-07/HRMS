@@ -3,6 +3,7 @@ import { FiBell } from "react-icons/fi";
 import api from "../api/axios";
 import useAuthStore from "../stores/authstore";
 import { useSocket } from "../contexts/SocketContext";
+import { useNavigate } from "react-router-dom";
 
 export default function NotificationDropdown() {
   const [open, setOpen] = useState(false);
@@ -11,6 +12,7 @@ export default function NotificationDropdown() {
 
   const user = useAuthStore((s) => s.user);
   const { socket, isConnected } = useSocket();
+  const navigate = useNavigate();
 
   const loadNotes = useCallback(async () => {
     try {
@@ -18,12 +20,30 @@ export default function NotificationDropdown() {
       let all = r.data.notifications || [];
 
       // ---------------------------
-      // 1️⃣ ADMIN sees ALL notifications
+      // 1️⃣ ADMIN sees ALL notifications (no unread count)
       // ---------------------------
       if (user?.role === "ADMIN") {
-        setNotes(all);
-        // Count unread for admin (notifications not read by anyone)
-        setUnreadCount(all.filter(n => !n.isRead || (n.readByIds && n.readByIds.length === 0)).length);
+        // Deduplicate leave-request notifications so one leave = one row
+        const seen = new Set();
+        const deduped = [];
+
+        for (const n of all) {
+          const metaType = n.meta?.type;
+          const leaveId = n.meta?.leaveId;
+
+          if (metaType === "leave_request" && leaveId) {
+            const key = `leave_request:${leaveId}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            deduped.push(n);
+          } else {
+            deduped.push(n);
+          }
+        }
+
+        setNotes(deduped);
+        // Admin does not have per-notification "read" state
+        setUnreadCount(0);
         return;
       }
 
@@ -33,8 +53,11 @@ export default function NotificationDropdown() {
       const filtered = all.filter((n) => n.userId === user?.id);
 
       setNotes(filtered);
-      // Count unread for employee
-      setUnreadCount(filtered.filter(n => !n.isRead || !(n.readByIds && n.readByIds.includes(user?.id))).length);
+      // Count unread for employee: based only on readByIds
+      const unreadForUser = filtered.filter(
+        (n) => !(n.readByIds && n.readByIds.includes(user?.id))
+      );
+      setUnreadCount(unreadForUser.length);
     } catch (error) {
       console.error("Failed to load notifications:", error);
     }
@@ -62,13 +85,20 @@ export default function NotificationDropdown() {
       loadNotes();
     };
 
+    // Listen for generic notifications (admin / manager created)
+    const handleGenericNotification = () => {
+      loadNotes();
+    };
+
     socket.on("new_leave_request", handleNewLeaveRequest);
     socket.on("leave_status_update", handleLeaveStatusUpdate);
+    socket.on("notification_created", handleGenericNotification);
 
     return () => {
       if (socket) {
         socket.off("new_leave_request", handleNewLeaveRequest);
         socket.off("leave_status_update", handleLeaveStatusUpdate);
+        socket.off("notification_created", handleGenericNotification);
       }
     };
   }, [socket, isConnected, user?.id, loadNotes]);
@@ -98,7 +128,66 @@ export default function NotificationDropdown() {
               notes.map((n) => (
                 <div
                   key={n.id}
-                  className="p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700"
+                  className="p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer"
+                  onClick={async () => {
+                    // 1️⃣ For employees → optimistically mark as read and update badge
+                    if (user?.role !== "ADMIN" && user?.id) {
+                      const alreadyRead =
+                        n.readByIds && n.readByIds.includes(user.id);
+
+                      if (!alreadyRead) {
+                        // Optimistic local update
+                        setNotes((prev) => {
+                          const updated = prev.map((item) =>
+                            item.id === n.id
+                              ? {
+                                  ...item,
+                                  readByIds: [
+                                    ...(item.readByIds || []),
+                                    user.id,
+                                  ],
+                                }
+                              : item
+                          );
+
+                          const unreadForUser = updated.filter(
+                            (item) =>
+                              !(
+                                item.readByIds &&
+                                item.readByIds.includes(user.id)
+                              )
+                          );
+                          setUnreadCount(unreadForUser.length);
+
+                          return updated;
+                        });
+
+                        // Fire API in background; if it fails, reload from server
+                        try {
+                          await api.patch(`/notifications/${n.id}/read`);
+                        } catch (error) {
+                          console.error("Failed to mark notification read:", error);
+                          // Fallback: reload from backend to correct state
+                          loadNotes();
+                        }
+                      }
+                    }
+
+                    // 2️⃣ Navigation logic
+                    const metaType = n.meta?.type;
+                    const leaveId = n.meta?.leaveId;
+
+                    // If this is a leave request notification with leaveId → jump to specific leave
+                    if (metaType === "leave_request" && leaveId) {
+                      navigate(`/leaves?leaveId=${leaveId}`);
+                      setOpen(false);
+                      return;
+                    }
+
+                    // Fallback: go to full notifications page
+                    navigate("/notifications");
+                    setOpen(false);
+                  }}
                 >
                   <div className="text-sm font-bold">{n.title}</div>
                   <div className="text-xs text-gray-400">{n.body}</div>

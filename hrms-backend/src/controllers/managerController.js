@@ -1,4 +1,5 @@
 import prisma from "../prismaClient.js";
+import { emitToUsers } from "../socket/socketServer.js";
 
 /* =====================================================
    🔹 COMMON HELPERS (UPDATED FOR MULTI-DEPARTMENT)
@@ -358,6 +359,13 @@ export const managerSendNotification = async (req, res) => {
         title,
         body,
       })),
+    });
+
+    // 🔔 Socket: notify all targeted employees in real-time
+    emitToUsers(employeeIds, "notification_created", {
+      scope: "MANAGER_EMPLOYEES",
+      title,
+      body,
     });
 
     res.json({ success: true, message: "Notification sent" });
