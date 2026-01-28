@@ -11,31 +11,93 @@ export const listNotifications = async (req, res) => {
     let notifications;
 
     if (user.role === "ADMIN") {
-      // Admin can view all notifications
+      // Admin notifications: base list (all notifications from active users)
       notifications = await prisma.notification.findMany({
-          where: {
-    user: {
-      isActive: true        // 🔥 BLOCK soft-deleted employees
-    }
-  },
+        where: {
+          user: {
+            isActive: true, // 🔥 BLOCK soft-deleted employees
+          },
+        },
         orderBy: { createdAt: "desc" },
         include: {
-          user: { select: { id: true, firstName: true, lastName: true, role: true } }
-        }
+          user: { select: { id: true, firstName: true, lastName: true, role: true } },
+        },
       });
 
-      // Fetch all user names ONCE for mapping readByIds
+      // Fetch all users once (with roles) to map readByIds and admin identities
       const allUsers = await prisma.user.findMany({
-        where: { isActive: true }, 
-        select: { id: true, firstName: true, lastName: true }
+        where: { isActive: true },
+        select: { id: true, firstName: true, lastName: true, role: true },
       });
 
-      // Convert readByIds → readBy array
-      notifications = notifications.map((n) => ({
+      const adminIds = new Set(
+        allUsers.filter((u) => u.role === "ADMIN").map((u) => u.id)
+      );
+
+      // Attach readBy array with user objects
+      let mapped = notifications.map((n) => ({
         ...n,
-        readBy: allUsers.filter((u) => n.readByIds.includes(u.id))
+        readBy: allUsers.filter((u) => n.readByIds.includes(u.id)),
       }));
 
+      // Step 1: keep only notifications that have NOT been seen by any admin yet
+      mapped = mapped.filter(
+        (n) => !n.readBy.some((u) => adminIds.has(u.id))
+      );
+
+      // Step 2: keep only notifications that correspond to "pending" requests
+      const leaveIds = new Set(
+        mapped
+          .filter((n) => n.meta?.type === "leave_request" && n.meta?.leaveId)
+          .map((n) => String(n.meta.leaveId))
+      );
+
+      const correctionIds = new Set(
+        mapped
+          .filter(
+            (n) =>
+              n.meta?.type === "attendance_correction" && n.meta?.correctionId
+          )
+          .map((n) => String(n.meta.correctionId))
+      );
+
+      const [leaves, corrections] = await Promise.all([
+        leaveIds.size
+          ? prisma.leave.findMany({
+              where: { id: { in: Array.from(leaveIds) } },
+              select: { id: true, status: true },
+            })
+          : Promise.resolve([]),
+        correctionIds.size
+          ? prisma.attendanceCorrection.findMany({
+              where: { id: { in: Array.from(correctionIds) } },
+              select: { id: true, status: true },
+            })
+          : Promise.resolve([]),
+      ]);
+
+      const leaveStatus = new Map(leaves.map((l) => [l.id, l.status]));
+      const correctionStatus = new Map(
+        corrections.map((c) => [c.id, c.status])
+      );
+
+      mapped = mapped.filter((n) => {
+        const t = n.meta?.type;
+        if (t === "leave_request") {
+          const lid = n.meta?.leaveId;
+          if (!lid) return false;
+          return leaveStatus.get(String(lid)) === "PENDING";
+        }
+        if (t === "attendance_correction") {
+          const cid = n.meta?.correctionId;
+          if (!cid) return false;
+          return correctionStatus.get(String(cid)) === "PENDING";
+        }
+        // Other notification types are not considered "pending requests" for admins
+        return false;
+      });
+
+      notifications = mapped;
     } else {
       // Employee → only their own notifications
       notifications = await prisma.notification.findMany({
@@ -178,7 +240,9 @@ export const createNotification = async (req, res) => {
 };
 
 /* =====================================================
-   MARK AS READ (ONLY EMPLOYEE)
+   MARK AS READ (Employee + Admin)
+   - Employees can mark their own notifications
+   - Admins can mark any notification as read for themselves
 ===================================================== */
 export const markNotificationRead = async (req, res) => {
   try {
@@ -198,11 +262,8 @@ export const markNotificationRead = async (req, res) => {
     if (!notif)
       return res.status(404).json({ success: false, message: "Notification not found" });
 
-    // Admin cannot read notifications
-    if (user.role === "ADMIN")
-      return res.status(400).json({ success: false, message: "Admin cannot mark read" });
-
-    if (notif.userId !== user.id)
+    // For non-admins, ensure this notification belongs to them
+    if (user.role !== "ADMIN" && notif.userId !== user.id)
       return res.status(403).json({ success: false, message: "Not allowed" });
 
     // Already read?

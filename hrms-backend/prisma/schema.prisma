@@ -136,6 +136,9 @@ model AttendanceCorrection {
   userId      String
   date        DateTime   @db.Date 
   reason      String
+  checkIn     DateTime?
+  checkOut    DateTime?
+  witness     String?
   status      String    @default("PENDING") // PENDING | APPROVED | REJECTED
   adminReason String?
   createdAt   DateTime  @default(now())
